@@ -19,8 +19,13 @@ use crate::civ::{CONTROLLER_ADDR, bcd_to_freq, encode_frame, freq_to_bcd, valida
 // CI-V command/sub-command constants
 // ---------------------------------------------------------------
 
-/// Set frequency (cmd 0x00). Data: 5-byte BCD frequency, no sub-command.
-const CMD_SET_FREQ: u8 = 0x00;
+/// Write operating frequency (cmd 0x05). Data: 5-byte BCD frequency, no sub-command.
+///
+/// Note: CI-V command 0x00 is the *transceive* command (Transfer operating
+/// frequency data), which is what the rig broadcasts when the user turns
+/// the VFO knob. Command 0x05 is the correct controller→rig "set frequency"
+/// command used by hamlib, flrig, and other rig control software.
+const CMD_SET_FREQ: u8 = 0x05;
 
 /// Read operating frequency (cmd 0x03). No sub-command, no data.
 const CMD_READ_FREQ: u8 = 0x03;
@@ -109,7 +114,7 @@ const CIV_FILTER_DEFAULT: u8 = 0x01;
 
 /// Build a CI-V "set frequency" command.
 ///
-/// Encodes `freq_hz` as 5-byte BCD and sends command 0x00 to the rig.
+/// Encodes `freq_hz` as 5-byte BCD and sends command 0x05 to the rig.
 ///
 /// # Arguments
 ///
@@ -466,7 +471,7 @@ mod tests {
     #[test]
     fn cmd_set_frequency_bytes() {
         let bytes = cmd_set_frequency(IC7610_ADDR, 14_250_000);
-        // FE FE 98 E0 00 <5 BCD bytes> FD
+        // FE FE 98 E0 05 <5 BCD bytes> FD
         assert_eq!(bytes[0], 0xFE);
         assert_eq!(bytes[1], 0xFE);
         assert_eq!(bytes[2], IC7610_ADDR);

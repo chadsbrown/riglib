@@ -37,6 +37,7 @@ pub mod civ;
 pub mod commands;
 pub mod models;
 pub mod rig;
+pub mod transceive;
 
 pub use builder::IcomBuilder;
 pub use rig::IcomRig;

@@ -24,6 +24,7 @@ use riglib_core::audio::{AudioCapable, AudioReceiver, AudioSender, AudioStreamCo
 use crate::civ::{self, CONTROLLER_ADDR, CivFrame, DecodeResult};
 use crate::commands;
 use crate::models::IcomModel;
+use crate::transceive::{self, CommandRequest, TransceiveHandle};
 
 /// A connected Icom transceiver controlled over CI-V.
 ///
@@ -39,6 +40,8 @@ pub struct IcomRig {
     collision_recovery: bool,
     command_timeout: Duration,
     info: RigInfo,
+    /// Handle to the background transceive reader task, if active.
+    transceive_handle: Mutex<Option<TransceiveHandle>>,
     /// USB audio device name (e.g. "USB Audio CODEC"). When set, this rig
     /// supports audio streaming via the `AudioCapable` trait.
     #[cfg(feature = "audio")]
@@ -81,6 +84,7 @@ impl IcomRig {
             collision_recovery,
             command_timeout,
             info,
+            transceive_handle: Mutex::new(None),
             #[cfg(feature = "audio")]
             audio_device_name,
             #[cfg(feature = "audio")]
@@ -88,13 +92,100 @@ impl IcomRig {
         }
     }
 
+    /// Enable CI-V transceive mode.
+    ///
+    /// Moves the transport from the `Arc<Mutex<>>` into a background reader
+    /// task that listens for unsolicited transceive frames (frequency/mode
+    /// changes) and emits them as events. Commands are forwarded to the
+    /// reader task via an `mpsc` channel.
+    ///
+    /// This should be called once after construction, before issuing
+    /// commands, when the rig has CI-V Transceive enabled.
+    pub async fn enable_transceive(&self) {
+        let mut handle_guard = self.transceive_handle.lock().await;
+        if handle_guard.is_some() {
+            debug!("transceive already enabled");
+            return;
+        }
+
+        // Take the real transport out and replace with a sentinel.
+        let real_transport = {
+            let mut transport_guard = self.transport.lock().await;
+            std::mem::replace(
+                &mut *transport_guard,
+                Box::new(transceive::DisconnectedTransport) as Box<dyn Transport>,
+            )
+        };
+
+        let handle = transceive::spawn_reader_task(
+            real_transport,
+            self.civ_address,
+            self.event_tx.clone(),
+            self.auto_retry,
+            self.max_retries,
+            self.collision_recovery,
+            self.command_timeout,
+        );
+
+        debug!("CI-V transceive mode enabled");
+        *handle_guard = Some(handle);
+    }
+
     /// Send a CI-V command and wait for the rig's response frame.
+    ///
+    /// Dispatches to either the transceive channel path (if enabled) or
+    /// the direct transport path.
+    async fn execute_command(&self, cmd: &[u8]) -> Result<CivFrame> {
+        // Check if transceive mode is active. Lock briefly to clone the sender.
+        let maybe_sender = {
+            let guard = self.transceive_handle.lock().await;
+            guard.as_ref().map(|h| h.cmd_tx.clone())
+        };
+
+        if let Some(cmd_tx) = maybe_sender {
+            self.execute_command_via_channel(cmd, cmd_tx).await
+        } else {
+            self.execute_command_direct(cmd).await
+        }
+    }
+
+    /// Execute a command by sending it through the transceive reader task.
+    async fn execute_command_via_channel(
+        &self,
+        cmd: &[u8],
+        cmd_tx: tokio::sync::mpsc::Sender<CommandRequest>,
+    ) -> Result<CivFrame> {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+        let request = CommandRequest {
+            cmd_bytes: cmd.to_vec(),
+            response_tx,
+        };
+
+        cmd_tx
+            .send(request)
+            .await
+            .map_err(|_| Error::NotConnected)?;
+
+        match tokio::time::timeout(
+            self.command_timeout + Duration::from_millis(500),
+            response_rx,
+        )
+        .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(Error::NotConnected), // oneshot sender dropped
+            Err(_) => Err(Error::Timeout),           // overall timeout
+        }
+    }
+
+    /// Send a CI-V command directly on the transport (non-transceive mode).
     ///
     /// Handles:
     /// - Echo frames (CI-V bus echoes every transmitted byte back)
     /// - Collision detection and retry (if `collision_recovery` is enabled)
     /// - Timeout with configurable retry count
-    async fn execute_command(&self, cmd: &[u8]) -> Result<CivFrame> {
+    async fn execute_command_direct(&self, cmd: &[u8]) -> Result<CivFrame> {
         let retries = if self.auto_retry { self.max_retries } else { 0 };
         let mut transport = self.transport.lock().await;
 
@@ -258,12 +349,7 @@ impl IcomRig {
     /// frequency responses (cmd 0x03), all 5 bytes are BCD data -- there
     /// is no real sub-command. We recombine them here.
     fn frame_freq_data(frame: &CivFrame) -> Vec<u8> {
-        let mut data = Vec::with_capacity(5);
-        if let Some(sub) = frame.sub_cmd {
-            data.push(sub);
-        }
-        data.extend_from_slice(&frame.data);
-        data
+        transceive::reassemble_payload(frame)
     }
 
     /// Reassemble the mode+filter payload from a mode response frame.
@@ -271,22 +357,12 @@ impl IcomRig {
     /// Same logic as [`frame_freq_data`] -- the generic decoder splits
     /// the first payload byte into `sub_cmd`.
     fn frame_mode_data(frame: &CivFrame) -> Vec<u8> {
-        let mut data = Vec::with_capacity(2);
-        if let Some(sub) = frame.sub_cmd {
-            data.push(sub);
-        }
-        data.extend_from_slice(&frame.data);
-        data
+        transceive::reassemble_payload(frame)
     }
 
     /// Reassemble generic response data, combining sub_cmd and data fields.
     fn frame_payload(frame: &CivFrame) -> Vec<u8> {
-        let mut data = Vec::new();
-        if let Some(sub) = frame.sub_cmd {
-            data.push(sub);
-        }
-        data.extend_from_slice(&frame.data);
-        data
+        transceive::reassemble_payload(frame)
     }
 
     /// Convert a normalized meter reading (0.0--1.0) to approximate dBm

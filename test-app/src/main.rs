@@ -790,7 +790,14 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
                     .await
                     .context("failed to build IcomRig")?;
 
-                println!("Connected to {port} at {baud} baud -- Icom {}", model.name);
+                // Enable CI-V transceive listener so the `monitor` command
+                // receives unsolicited frequency/mode broadcasts from the rig.
+                rig.enable_transceive().await;
+
+                println!(
+                    "Connected to {port} at {baud} baud -- Icom {} (transceive enabled)",
+                    model.name
+                );
                 Ok(Box::new(rig))
             }
         }
@@ -1197,7 +1204,32 @@ async fn cmd_monitor(rig: &dyn Rig, duration_secs: u64) -> Result<()> {
 
         match tokio::time::timeout(timeout, event_rx.recv()).await {
             Ok(Ok(event)) => {
-                println!("[event] {event:?}");
+                match &event {
+                    riglib::RigEvent::FrequencyChanged { receiver, freq_hz } => {
+                        println!("[freq]  {receiver}: {}", format_freq(*freq_hz));
+                    }
+                    riglib::RigEvent::ModeChanged { receiver, mode } => {
+                        println!("[mode]  {receiver}: {mode}");
+                    }
+                    riglib::RigEvent::PttChanged { on } => {
+                        println!("[ptt]   {}", if *on { "TX" } else { "RX" });
+                    }
+                    riglib::RigEvent::SplitChanged { on } => {
+                        println!("[split] {}", if *on { "ON" } else { "OFF" });
+                    }
+                    riglib::RigEvent::SmeterReading { receiver, dbm } => {
+                        println!("[smeter] {receiver}: {dbm:.1} dBm");
+                    }
+                    riglib::RigEvent::PowerReading { watts } => {
+                        println!("[power] {watts:.1} W");
+                    }
+                    riglib::RigEvent::SwrReading { swr } => {
+                        println!("[swr]   {swr:.2}:1");
+                    }
+                    _ => {
+                        println!("[event] {event:?}");
+                    }
+                }
             }
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
                 println!("[warning] missed {n} events (consumer too slow)");

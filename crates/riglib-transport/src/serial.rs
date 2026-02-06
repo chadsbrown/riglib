@@ -35,7 +35,7 @@ use riglib_core::error::{Error, Result};
 use riglib_core::transport::Transport;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio_serial::{SerialPortBuilderExt, SerialStream};
+use tokio_serial::{SerialPort, SerialPortBuilderExt, SerialStream};
 
 /// Serial port configuration.
 ///
@@ -218,7 +218,7 @@ impl SerialTransport {
             "Opening serial port"
         );
 
-        let serial_stream = tokio_serial::new(port, config.baud_rate)
+        let mut serial_stream = tokio_serial::new(port, config.baud_rate)
             .data_bits(config.data_bits.into())
             .stop_bits(config.stop_bits.into())
             .parity(config.parity.into())
@@ -228,6 +228,19 @@ impl SerialTransport {
                 tracing::error!(port = %port, error = %e, "Failed to open serial port");
                 Error::Transport(format!("Failed to open serial port {}: {}", port, e))
             })?;
+
+        // De-assert DTR and RTS immediately after opening.
+        //
+        // Many transceivers route DTR/RTS to CW key and/or PTT inputs.
+        // If the OS asserts DTR on open (common default), the radio will
+        // interpret it as key-down and produce a continuous sidetone.
+        // Hamlib, flrig, and wsjt-x all do this same de-assertion.
+        if let Err(e) = serial_stream.write_data_terminal_ready(false) {
+            tracing::warn!(port = %port, error = %e, "Failed to de-assert DTR");
+        }
+        if let Err(e) = serial_stream.write_request_to_send(false) {
+            tracing::warn!(port = %port, error = %e, "Failed to de-assert RTS");
+        }
 
         tracing::info!(port = %port, baud_rate = config.baud_rate, "Serial port opened successfully");
 
