@@ -1,0 +1,12 @@
+[package]
+name = "riglib-core"
+description = "Core traits and types for riglib — modern rig control library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }

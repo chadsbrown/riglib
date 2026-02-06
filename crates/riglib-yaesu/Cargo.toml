@@ -1,0 +1,23 @@
+[package]
+name = "riglib-yaesu"
+description = "Yaesu CAT protocol backend for riglib"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+audio = ["riglib-transport/audio"]
+
+[dependencies]
+riglib-core.workspace = true
+riglib-transport.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+riglib-test-harness.workspace = true

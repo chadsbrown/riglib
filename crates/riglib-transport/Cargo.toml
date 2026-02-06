@@ -1,0 +1,20 @@
+[package]
+name = "riglib-transport"
+description = "Transport implementations (serial, TCP, UDP) for riglib"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+audio = ["dep:cpal"]
+
+[dependencies]
+riglib-core.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio-serial = "5.4"
+cpal = { version = "0.17", optional = true }

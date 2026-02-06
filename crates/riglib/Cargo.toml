@@ -1,0 +1,31 @@
+[package]
+name = "riglib"
+description = "Modern rig control library for Icom, Yaesu, FlexRadio, Elecraft, and Kenwood transceivers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["icom", "yaesu", "elecraft", "kenwood", "flex"]
+icom = ["dep:riglib-icom"]
+yaesu = ["dep:riglib-yaesu"]
+elecraft = ["dep:riglib-elecraft"]
+kenwood = ["dep:riglib-kenwood"]
+flex = ["dep:riglib-flex"]
+audio = ["riglib-transport/audio"]
+full = ["icom", "yaesu", "elecraft", "kenwood", "flex"]
+
+[dependencies]
+riglib-core.workspace = true
+riglib-transport.workspace = true
+riglib-icom = { workspace = true, optional = true }
+riglib-yaesu = { workspace = true, optional = true }
+riglib-elecraft = { workspace = true, optional = true }
+riglib-kenwood = { workspace = true, optional = true }
+riglib-flex = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+anyhow = "1"
+hound = "3.5"

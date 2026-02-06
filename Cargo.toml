@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/riglib",
+    "crates/riglib-core",
+    "crates/riglib-transport",
+    "crates/riglib-icom",
+    "crates/riglib-yaesu",
+    "crates/riglib-elecraft",
+    "crates/riglib-kenwood",
+    "crates/riglib-flex",
+    "crates/riglib-test-harness",
+    "test-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+
+[workspace.dependencies]
+riglib = { path = "crates/riglib" }
+riglib-core = { path = "crates/riglib-core" }
+riglib-transport = { path = "crates/riglib-transport" }
+riglib-icom = { path = "crates/riglib-icom" }
+riglib-yaesu = { path = "crates/riglib-yaesu" }
+riglib-elecraft = { path = "crates/riglib-elecraft" }
+riglib-kenwood = { path = "crates/riglib-kenwood" }
+riglib-flex = { path = "crates/riglib-flex" }
+riglib-test-harness = { path = "crates/riglib-test-harness" }
+
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+thiserror = "2"
+bytes = "1"
+tracing = "0.1"
