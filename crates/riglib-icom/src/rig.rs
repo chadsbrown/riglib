@@ -175,7 +175,7 @@ impl IcomRig {
         {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(Error::NotConnected), // oneshot sender dropped
-            Err(_) => Err(Error::Timeout),           // overall timeout
+            Err(_) => Err(Error::Timeout),          // overall timeout
         }
     }
 

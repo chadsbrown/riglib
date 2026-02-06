@@ -1203,34 +1203,32 @@ async fn cmd_monitor(rig: &dyn Rig, duration_secs: u64) -> Result<()> {
         };
 
         match tokio::time::timeout(timeout, event_rx.recv()).await {
-            Ok(Ok(event)) => {
-                match &event {
-                    riglib::RigEvent::FrequencyChanged { receiver, freq_hz } => {
-                        println!("[freq]  {receiver}: {}", format_freq(*freq_hz));
-                    }
-                    riglib::RigEvent::ModeChanged { receiver, mode } => {
-                        println!("[mode]  {receiver}: {mode}");
-                    }
-                    riglib::RigEvent::PttChanged { on } => {
-                        println!("[ptt]   {}", if *on { "TX" } else { "RX" });
-                    }
-                    riglib::RigEvent::SplitChanged { on } => {
-                        println!("[split] {}", if *on { "ON" } else { "OFF" });
-                    }
-                    riglib::RigEvent::SmeterReading { receiver, dbm } => {
-                        println!("[smeter] {receiver}: {dbm:.1} dBm");
-                    }
-                    riglib::RigEvent::PowerReading { watts } => {
-                        println!("[power] {watts:.1} W");
-                    }
-                    riglib::RigEvent::SwrReading { swr } => {
-                        println!("[swr]   {swr:.2}:1");
-                    }
-                    _ => {
-                        println!("[event] {event:?}");
-                    }
+            Ok(Ok(event)) => match &event {
+                riglib::RigEvent::FrequencyChanged { receiver, freq_hz } => {
+                    println!("[freq]  {receiver}: {}", format_freq(*freq_hz));
                 }
-            }
+                riglib::RigEvent::ModeChanged { receiver, mode } => {
+                    println!("[mode]  {receiver}: {mode}");
+                }
+                riglib::RigEvent::PttChanged { on } => {
+                    println!("[ptt]   {}", if *on { "TX" } else { "RX" });
+                }
+                riglib::RigEvent::SplitChanged { on } => {
+                    println!("[split] {}", if *on { "ON" } else { "OFF" });
+                }
+                riglib::RigEvent::SmeterReading { receiver, dbm } => {
+                    println!("[smeter] {receiver}: {dbm:.1} dBm");
+                }
+                riglib::RigEvent::PowerReading { watts } => {
+                    println!("[power] {watts:.1} W");
+                }
+                riglib::RigEvent::SwrReading { swr } => {
+                    println!("[swr]   {swr:.2}:1");
+                }
+                _ => {
+                    println!("[event] {event:?}");
+                }
+            },
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
                 println!("[warning] missed {n} events (consumer too slow)");
             }

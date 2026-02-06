@@ -19,7 +19,7 @@ use riglib_core::events::RigEvent;
 use riglib_core::transport::Transport;
 use riglib_core::types::*;
 
-use crate::civ::{self, CivFrame, DecodeResult, CONTROLLER_ADDR};
+use crate::civ::{self, CONTROLLER_ADDR, CivFrame, DecodeResult};
 use crate::commands;
 
 // ---------------------------------------------------------------------------
@@ -216,7 +216,11 @@ async fn execute_command_on_transport(
     config: &ReaderConfig,
     event_tx: &broadcast::Sender<RigEvent>,
 ) -> Result<CivFrame> {
-    let retries = if config.auto_retry { config.max_retries } else { 0 };
+    let retries = if config.auto_retry {
+        config.max_retries
+    } else {
+        0
+    };
     let civ_address = config.civ_address;
 
     for attempt in 0..=retries {
@@ -258,20 +262,14 @@ async fn execute_command_on_transport(
                                     && frame.src_addr == civ_address
                                 {
                                     if frame.is_nak() {
-                                        return Err(Error::Protocol(
-                                            "rig returned NAK".into(),
-                                        ));
+                                        return Err(Error::Protocol("rig returned NAK".into()));
                                     }
                                     return Ok(frame);
                                 }
 
                                 // Interleaved transceive broadcast -- emit as event.
                                 if is_transceive_frame(&frame, civ_address) {
-                                    process_single_transceive_frame(
-                                        &frame,
-                                        civ_address,
-                                        event_tx,
-                                    );
+                                    process_single_transceive_frame(&frame, civ_address, event_tx);
                                     continue;
                                 }
 
@@ -299,9 +297,7 @@ async fn execute_command_on_transport(
                 }
                 Ok(Err(Error::Timeout)) => {
                     if !response_buf.is_empty() {
-                        if let DecodeResult::Frame(frame, _) =
-                            civ::decode_frame(&response_buf)
-                        {
+                        if let DecodeResult::Frame(frame, _) = civ::decode_frame(&response_buf) {
                             if frame.dst_addr == CONTROLLER_ADDR
                                 && frame.src_addr == civ_address
                                 && !frame.is_nak()
@@ -316,9 +312,7 @@ async fn execute_command_on_transport(
                 Err(_) => {
                     // tokio::time::timeout expired.
                     if !response_buf.is_empty() {
-                        if let DecodeResult::Frame(frame, _) =
-                            civ::decode_frame(&response_buf)
-                        {
+                        if let DecodeResult::Frame(frame, _) = civ::decode_frame(&response_buf) {
                             if frame.dst_addr == CONTROLLER_ADDR
                                 && frame.src_addr == civ_address
                                 && !frame.is_nak()
@@ -389,34 +383,30 @@ fn process_single_transceive_frame(
     let payload = reassemble_payload(frame);
 
     match frame.cmd {
-        CMD_TRANSCEIVE_FREQ => {
-            match commands::parse_frequency_response(&payload) {
-                Ok(freq_hz) => {
-                    debug!(freq_hz, "transceive frequency update");
-                    let _ = event_tx.send(RigEvent::FrequencyChanged {
-                        receiver: ReceiverId::VFO_A,
-                        freq_hz,
-                    });
-                }
-                Err(e) => {
-                    debug!(?e, "failed to parse transceive frequency frame");
-                }
+        CMD_TRANSCEIVE_FREQ => match commands::parse_frequency_response(&payload) {
+            Ok(freq_hz) => {
+                debug!(freq_hz, "transceive frequency update");
+                let _ = event_tx.send(RigEvent::FrequencyChanged {
+                    receiver: ReceiverId::VFO_A,
+                    freq_hz,
+                });
             }
-        }
-        CMD_TRANSCEIVE_MODE => {
-            match commands::parse_mode_response(&payload) {
-                Ok(mode) => {
-                    debug!(%mode, "transceive mode update");
-                    let _ = event_tx.send(RigEvent::ModeChanged {
-                        receiver: ReceiverId::VFO_A,
-                        mode,
-                    });
-                }
-                Err(e) => {
-                    debug!(?e, "failed to parse transceive mode frame");
-                }
+            Err(e) => {
+                debug!(?e, "failed to parse transceive frequency frame");
             }
-        }
+        },
+        CMD_TRANSCEIVE_MODE => match commands::parse_mode_response(&payload) {
+            Ok(mode) => {
+                debug!(%mode, "transceive mode update");
+                let _ = event_tx.send(RigEvent::ModeChanged {
+                    receiver: ReceiverId::VFO_A,
+                    mode,
+                });
+            }
+            Err(e) => {
+                debug!(?e, "failed to parse transceive mode frame");
+            }
+        },
         other => {
             debug!(cmd = other, "unknown transceive command, ignoring");
         }
@@ -517,8 +507,13 @@ mod tests {
 
         // Two transceive frames back-to-back.
         let bcd1 = civ::freq_to_bcd(7_000_000);
-        let frame1 =
-            encode_frame(BROADCAST_ADDR, IC7610_ADDR, CMD_TRANSCEIVE_FREQ, None, &bcd1);
+        let frame1 = encode_frame(
+            BROADCAST_ADDR,
+            IC7610_ADDR,
+            CMD_TRANSCEIVE_FREQ,
+            None,
+            &bcd1,
+        );
         let frame2 = encode_frame(
             BROADCAST_ADDR,
             IC7610_ADDR,
@@ -574,8 +569,7 @@ mod tests {
 
         // Frame from a different rig address (0x94 instead of 0x98).
         let bcd = civ::freq_to_bcd(14_074_000);
-        let frame_bytes =
-            encode_frame(BROADCAST_ADDR, 0x94, CMD_TRANSCEIVE_FREQ, None, &bcd);
+        let frame_bytes = encode_frame(BROADCAST_ADDR, 0x94, CMD_TRANSCEIVE_FREQ, None, &bcd);
 
         let mut buf = frame_bytes;
         process_transceive_frames(&mut buf, IC7610_ADDR, &event_tx);
