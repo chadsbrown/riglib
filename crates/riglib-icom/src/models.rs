@@ -27,7 +27,7 @@
 //! | IC-7410    | `0x80` | 19200   | 100W  | HF + 6m            |
 //! | IC-905     | `0xAC` | 115200  | 10W   | VHF/UHF/SHF        |
 
-use riglib_core::{BandRange, Mode, RigCapabilities};
+use riglib_core::{BandRange, ConnectionType, Manufacturer, Mode, RigCapabilities, RigDefinition};
 
 /// Static model definition for an Icom transceiver.
 ///
@@ -52,6 +52,18 @@ pub struct IcomModel {
     pub default_baud_rate: u32,
     /// Full capability description for this model.
     pub capabilities: RigCapabilities,
+}
+
+impl From<&IcomModel> for RigDefinition {
+    fn from(model: &IcomModel) -> Self {
+        RigDefinition {
+            manufacturer: Manufacturer::Icom,
+            model_name: model.name,
+            connection: ConnectionType::Serial,
+            default_baud_rate: Some(model.default_baud_rate),
+            capabilities: model.capabilities.clone(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

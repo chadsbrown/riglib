@@ -20,7 +20,7 @@
 //! | TS-990S    | 115200  | 200W  | HF + 6m    | Yes     |
 //! | TS-890S    | 115200  | 100W  | HF + 6m    | Yes     |
 
-use riglib_core::{BandRange, Mode, RigCapabilities};
+use riglib_core::{BandRange, ConnectionType, Manufacturer, Mode, RigCapabilities, RigDefinition};
 
 /// Static model definition for a Kenwood transceiver.
 ///
@@ -47,6 +47,18 @@ pub struct KenwoodModel {
     /// voice and data sub-modes (e.g. USB vs DATA-USB). Older models
     /// like the TS-590S/SG do not have this distinction in the protocol.
     pub has_data_modes: bool,
+}
+
+impl From<&KenwoodModel> for RigDefinition {
+    fn from(model: &KenwoodModel) -> Self {
+        RigDefinition {
+            manufacturer: Manufacturer::Kenwood,
+            model_name: model.name,
+            connection: ConnectionType::Serial,
+            default_baud_rate: Some(model.default_baud_rate),
+            capabilities: model.capabilities.clone(),
+        }
+    }
 }
 
 /// Standard set of supported modes for Kenwood HF transceivers.

@@ -183,6 +183,48 @@ impl fmt::Display for Manufacturer {
     }
 }
 
+/// How the rig connects to the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConnectionType {
+    /// Serial port (USB virtual COM or RS-232).
+    Serial,
+    /// Network (TCP/IP, UDP, or both).
+    Network,
+}
+
+impl fmt::Display for ConnectionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConnectionType::Serial => write!(f, "Serial"),
+            ConnectionType::Network => write!(f, "Network"),
+        }
+    }
+}
+
+/// A supported rig model with enough information for a UI picker.
+///
+/// This struct provides a manufacturer-agnostic view of a rig model,
+/// suitable for populating dropdown lists, table views, and other UI
+/// elements where the application needs to enumerate all supported rigs
+/// without pulling in manufacturer-specific types.
+///
+/// Obtained via [`riglib::supported_rigs()`] (facade crate) or by
+/// converting a manufacturer-specific model type (e.g. `IcomModel`)
+/// via its `From` implementation.
+#[derive(Debug, Clone)]
+pub struct RigDefinition {
+    /// The manufacturer of the rig.
+    pub manufacturer: Manufacturer,
+    /// Human-readable model name (e.g. "IC-7610", "K4", "FLEX-6600").
+    pub model_name: &'static str,
+    /// How the rig connects to the host (serial or network).
+    pub connection: ConnectionType,
+    /// Default serial baud rate, if applicable (None for network-only rigs).
+    pub default_baud_rate: Option<u32>,
+    /// Full capability description for this model.
+    pub capabilities: RigCapabilities,
+}
+
 /// Static information about a connected rig.
 ///
 /// Returned by [`crate::rig::Rig::info()`] to identify the specific

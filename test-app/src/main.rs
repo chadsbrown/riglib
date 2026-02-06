@@ -481,14 +481,6 @@ fn lookup_flex_model(name: &str) -> Result<flex_models::FlexRadioModel> {
 // List command
 // ---------------------------------------------------------------------------
 
-/// A display row for the model listing table.
-struct ModelEntry {
-    manufacturer: &'static str,
-    name: &'static str,
-    max_power: f32,
-    freq_summary: String,
-}
-
 /// Format frequency ranges into a compact summary string.
 fn summarize_freq_ranges(ranges: &[riglib::BandRange]) -> String {
     ranges
@@ -507,82 +499,6 @@ fn summarize_freq_ranges(ranges: &[riglib::BandRange]) -> String {
         .join(", ")
 }
 
-/// Gather all model entries, optionally filtered by manufacturer.
-fn gather_models(filter_mfr: Option<&str>) -> Vec<ModelEntry> {
-    let mut entries = Vec::new();
-
-    let show_icom = filter_mfr.is_none() || filter_mfr == Some("icom");
-    let show_yaesu = filter_mfr.is_none() || filter_mfr == Some("yaesu");
-    let show_kenwood = filter_mfr.is_none() || filter_mfr == Some("kenwood");
-    let show_elecraft = filter_mfr.is_none() || filter_mfr == Some("elecraft");
-    let show_flex = filter_mfr.is_none() || filter_mfr == Some("flex");
-
-    if show_icom {
-        for m in icom_models::all_icom_models() {
-            entries.push(ModelEntry {
-                manufacturer: "Icom",
-                name: m.name,
-                max_power: m.capabilities.max_power_watts,
-                freq_summary: summarize_freq_ranges(&m.capabilities.frequency_ranges),
-            });
-        }
-    }
-
-    if show_yaesu {
-        let yaesu_models_list = [
-            yaesu_models::ft_dx10(),
-            yaesu_models::ft_891(),
-            yaesu_models::ft_991a(),
-            yaesu_models::ft_dx101d(),
-            yaesu_models::ft_dx101mp(),
-            yaesu_models::ft_710(),
-        ];
-        for m in yaesu_models_list {
-            entries.push(ModelEntry {
-                manufacturer: "Yaesu",
-                name: m.name,
-                max_power: m.capabilities.max_power_watts,
-                freq_summary: summarize_freq_ranges(&m.capabilities.frequency_ranges),
-            });
-        }
-    }
-
-    if show_kenwood {
-        for m in kenwood_models::all_kenwood_models() {
-            entries.push(ModelEntry {
-                manufacturer: "Kenwood",
-                name: m.name,
-                max_power: m.capabilities.max_power_watts,
-                freq_summary: summarize_freq_ranges(&m.capabilities.frequency_ranges),
-            });
-        }
-    }
-
-    if show_elecraft {
-        for m in elecraft_models::all_elecraft_models() {
-            entries.push(ModelEntry {
-                manufacturer: "Elecraft",
-                name: m.name,
-                max_power: m.capabilities.max_power_watts,
-                freq_summary: summarize_freq_ranges(&m.capabilities.frequency_ranges),
-            });
-        }
-    }
-
-    if show_flex {
-        for m in flex_models::all_flex_models() {
-            entries.push(ModelEntry {
-                manufacturer: "FlexRadio",
-                name: m.name,
-                max_power: m.capabilities.max_power_watts,
-                freq_summary: summarize_freq_ranges(&m.capabilities.frequency_ranges),
-            });
-        }
-    }
-
-    entries
-}
-
 fn cmd_list(filter_mfr: Option<&str>) -> Result<()> {
     // Validate the filter if provided.
     if let Some(mfr) = filter_mfr {
@@ -596,7 +512,16 @@ fn cmd_list(filter_mfr: Option<&str>) -> Result<()> {
     }
 
     let filter = filter_mfr.map(|s| s.to_lowercase());
-    let entries = gather_models(filter.as_deref());
+    let entries: Vec<_> = riglib::supported_rigs()
+        .into_iter()
+        .filter(|r| {
+            filter.as_deref().is_none_or(|f| {
+                let mfr = r.manufacturer.to_string().to_lowercase();
+                // Accept "flex" as shorthand for "flexradio".
+                mfr == f || (f == "flex" && mfr == "flexradio")
+            })
+        })
+        .collect();
 
     if entries.is_empty() {
         println!("No models found.");
@@ -606,13 +531,13 @@ fn cmd_list(filter_mfr: Option<&str>) -> Result<()> {
     // Calculate column widths for alignment.
     let mfr_width = entries
         .iter()
-        .map(|e| e.manufacturer.len())
+        .map(|e| e.manufacturer.to_string().len())
         .max()
         .unwrap_or(12)
         .max(12);
     let name_width = entries
         .iter()
-        .map(|e| e.name.len())
+        .map(|e| e.model_name.len())
         .max()
         .unwrap_or(12)
         .max(12);
@@ -639,9 +564,9 @@ fn cmd_list(filter_mfr: Option<&str>) -> Result<()> {
         println!(
             "{:<mfr_width$}  {:<name_width$}  {:>5.0} W  {}",
             entry.manufacturer,
-            entry.name,
-            entry.max_power,
-            entry.freq_summary,
+            entry.model_name,
+            entry.capabilities.max_power_watts,
+            summarize_freq_ranges(&entry.capabilities.frequency_ranges),
             mfr_width = mfr_width,
             name_width = name_width,
         );

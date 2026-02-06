@@ -10,7 +10,7 @@
 //! configurable in the rig's menu, but the defaults listed here are the
 //! factory settings for USB virtual COM port operation.
 
-use riglib_core::{BandRange, Mode, RigCapabilities};
+use riglib_core::{BandRange, ConnectionType, Manufacturer, Mode, RigCapabilities, RigDefinition};
 
 /// Static model definition for a Yaesu transceiver.
 ///
@@ -31,6 +31,18 @@ pub struct YaesuModel {
     /// (FT-DX101D/MP) have a true main+sub dual receiver architecture
     /// rather than simple VFO A/B switching.
     pub has_dual_vfo: bool,
+}
+
+impl From<&YaesuModel> for RigDefinition {
+    fn from(model: &YaesuModel) -> Self {
+        RigDefinition {
+            manufacturer: Manufacturer::Yaesu,
+            model_name: model.name,
+            connection: ConnectionType::Serial,
+            default_baud_rate: Some(model.default_baud_rate),
+            capabilities: model.capabilities.clone(),
+        }
+    }
 }
 
 /// Standard set of supported modes for Yaesu HF transceivers.
@@ -252,6 +264,21 @@ pub fn ft_710() -> YaesuModel {
         },
         has_dual_vfo: true,
     }
+}
+
+/// Returns a list of all supported Yaesu model definitions.
+///
+/// This is useful for building model selection UIs or iterating over
+/// all known models for auto-detection.
+pub fn all_yaesu_models() -> Vec<YaesuModel> {
+    vec![
+        ft_dx10(),
+        ft_891(),
+        ft_991a(),
+        ft_dx101d(),
+        ft_dx101mp(),
+        ft_710(),
+    ]
 }
 
 #[cfg(test)]

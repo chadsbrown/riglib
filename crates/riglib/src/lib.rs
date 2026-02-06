@@ -164,3 +164,70 @@ pub mod kenwood {
 pub mod flex {
     pub use riglib_flex::*;
 }
+
+/// Returns a flat list of all supported rig models across all enabled
+/// manufacturer backends.
+///
+/// This is the primary entry point for applications that need to enumerate
+/// supported rigs (e.g. for a model picker dropdown). Each manufacturer
+/// backend is gated behind its feature flag -- only models from enabled
+/// backends are included.
+///
+/// # Example
+///
+/// ```
+/// let rigs = riglib::supported_rigs();
+/// for rig in &rigs {
+///     println!("{} {} ({:?})", rig.manufacturer, rig.model_name, rig.connection);
+/// }
+/// ```
+pub fn supported_rigs() -> Vec<RigDefinition> {
+    let mut rigs = Vec::new();
+
+    #[cfg(feature = "icom")]
+    {
+        rigs.extend(
+            icom::models::all_icom_models()
+                .iter()
+                .map(RigDefinition::from),
+        );
+    }
+
+    #[cfg(feature = "yaesu")]
+    {
+        rigs.extend(
+            yaesu::models::all_yaesu_models()
+                .iter()
+                .map(RigDefinition::from),
+        );
+    }
+
+    #[cfg(feature = "kenwood")]
+    {
+        rigs.extend(
+            kenwood::models::all_kenwood_models()
+                .iter()
+                .map(RigDefinition::from),
+        );
+    }
+
+    #[cfg(feature = "elecraft")]
+    {
+        rigs.extend(
+            elecraft::models::all_elecraft_models()
+                .iter()
+                .map(RigDefinition::from),
+        );
+    }
+
+    #[cfg(feature = "flex")]
+    {
+        rigs.extend(
+            flex::models::all_flex_models()
+                .iter()
+                .map(RigDefinition::from),
+        );
+    }
+
+    rigs
+}

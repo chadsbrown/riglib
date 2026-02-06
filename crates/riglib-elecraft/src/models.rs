@@ -20,7 +20,7 @@
 //! | KX2    | 38400 | 10W   | HF + 6m  | No         | No         |
 //! | K4     | 38400 | 100W  | HF + 6m  | Yes (built)| Yes        |
 
-use riglib_core::{BandRange, Mode, RigCapabilities};
+use riglib_core::{BandRange, ConnectionType, Manufacturer, Mode, RigCapabilities, RigDefinition};
 
 /// Static model definition for an Elecraft transceiver.
 ///
@@ -53,6 +53,18 @@ pub struct ElecraftModel {
     /// The K4 has a built-in sub receiver. KX3/KX2 are single-receiver
     /// portables.
     pub has_sub_receiver: bool,
+}
+
+impl From<&ElecraftModel> for RigDefinition {
+    fn from(model: &ElecraftModel) -> Self {
+        RigDefinition {
+            manufacturer: Manufacturer::Elecraft,
+            model_name: model.name,
+            connection: ConnectionType::Serial,
+            default_baud_rate: Some(model.default_baud_rate),
+            capabilities: model.capabilities.clone(),
+        }
+    }
 }
 
 /// Standard set of supported modes for Elecraft HF transceivers.

@@ -26,7 +26,7 @@
 //! | FLEX-8400   | `flex8400`  | 4      | 2    | 4           | No          |
 //! | FLEX-8600   | `flex8600`  | 8      | 2    | 8           | No          |
 
-use riglib_core::{BandRange, Mode, RigCapabilities};
+use riglib_core::{BandRange, ConnectionType, Manufacturer, Mode, RigCapabilities, RigDefinition};
 
 /// Static model definition for a FlexRadio SDR transceiver.
 ///
@@ -58,6 +58,18 @@ pub struct FlexRadioModel {
     pub has_front_panel: bool,
     /// Full capability description for this model.
     pub capabilities: RigCapabilities,
+}
+
+impl From<&FlexRadioModel> for RigDefinition {
+    fn from(model: &FlexRadioModel) -> Self {
+        RigDefinition {
+            manufacturer: Manufacturer::FlexRadio,
+            model_name: model.name,
+            connection: ConnectionType::Network,
+            default_baud_rate: None,
+            capabilities: model.capabilities.clone(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
