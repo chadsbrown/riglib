@@ -16,6 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install ALSA dev headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -27,9 +30,6 @@ jobs:
 
       - name: Clippy (default features)
         run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Install ALSA dev headers
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
       - name: Clippy (audio features)
         run: >
@@ -47,16 +47,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install ALSA dev headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Run tests
         run: cargo test --workspace
-
-      - name: Install ALSA dev headers
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
       - name: Run tests (audio features)
         run: >
