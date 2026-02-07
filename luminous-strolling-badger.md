@@ -1130,15 +1130,40 @@ Need to add AI command first (not in commands.rs yet).
 
 ---
 
-## Phase 12: Transceive Trait Consolidation
+## Phase 12a: Transceive Trait — enable_transceive() Wiring
 
-Add uniform transceive API to the `Rig` trait.
+Wire each backend's existing `enable_transceive()` / `enable_ai_mode()` inherent method
+to the `Rig` trait's `enable_transceive()` method (already defined with default
+`Err(Unsupported)` impl). `disable_transceive()` returns `Err(Unsupported)` for now.
 
 ### Files to modify:
-- **`crates/riglib-core/src/rig.rs`** — Add `enable_transceive()`, `disable_transceive()` to trait
-- **Icom** — Wire existing transceive to trait methods
-- **Yaesu/Kenwood/Elecraft** — Wire to trait
-- **FlexRadio** — Always pushes state; `enable_transceive` is no-op
+- **`crates/riglib-icom/src/rig.rs`** — Override `enable_transceive` in `impl Rig`, delegate to inherent method. `disable_transceive` → `Err(Unsupported)`.
+- **`crates/riglib-elecraft/src/rig.rs`** — Same pattern, delegate to `enable_ai_mode()`.
+- **`crates/riglib-kenwood/src/rig.rs`** — Same pattern, delegate to `enable_ai_mode()`.
+- **`crates/riglib-yaesu/src/rig.rs`** — Same pattern, delegate to `enable_ai_mode()`.
+- **`crates/riglib-flex/src/rig.rs`** — `enable_transceive` → `Ok(())` (always-on). `disable_transceive` → `Err(Unsupported)`.
+- **`test-app/src/main.rs`** — Update call sites to use trait method with `Result` return.
+
+### Verification: `cargo check --workspace`, `cargo test --workspace`
+
+---
+
+## Phase 12b: Transceive Trait — disable_transceive() Implementation
+
+Implement real `disable_transceive()` for each serial backend: shut down the background
+reader task, send "AI off" command (CI-V transceive off for Icom, `AI0;` for
+Kenwood/Elecraft/Yaesu), and return transport ownership to direct mode.
+
+### Files to modify:
+- **`crates/riglib-icom/src/transceive.rs`** — Add `shutdown()` to `TransceiveHandle` that signals the reader task to stop, sends CI-V transceive-off, and returns the transport.
+- **`crates/riglib-icom/src/rig.rs`** — Override `disable_transceive` in `impl Rig`, call `TransceiveHandle::shutdown()`, restore transport to direct mode.
+- **`crates/riglib-elecraft/src/transceive.rs`** — Same pattern, send `AI0;` on shutdown.
+- **`crates/riglib-elecraft/src/rig.rs`** — Override `disable_transceive`.
+- **`crates/riglib-kenwood/src/transceive.rs`** — Same pattern, send `AI0;` on shutdown.
+- **`crates/riglib-kenwood/src/rig.rs`** — Override `disable_transceive`.
+- **`crates/riglib-yaesu/src/transceive.rs`** — Same pattern, send `AI0;` on shutdown.
+- **`crates/riglib-yaesu/src/rig.rs`** — Override `disable_transceive`.
+- **`crates/riglib-flex/src/rig.rs`** — Stays `Err(Unsupported)` (always-on, no shutdown).
 
 ### Verification: `cargo check --workspace`, `cargo test --workspace`
 
@@ -1193,7 +1218,9 @@ Phase 6-8 (preamp/att, RIT/XIT, CW messages) — sequential, each self-contained
    ↓
 Phase 9-11 (transceive: Kenwood, Elecraft, Yaesu) — independent of each other
    ↓
-Phase 12 (transceive consolidation) — depends on 9+10+11
+Phase 12a (transceive enable wiring) — depends on 9+10+11
+   ↓
+Phase 12b (transceive disable impl) — depends on 12a
    ↓
 Phase 13 (capabilities) — can happen anytime after Phase 1
    ↓
