@@ -174,7 +174,8 @@ pub fn decode_response(buf: &[u8]) -> DecodeResult {
 
     // Known command prefixes that include a trailing digit as part of the
     // command name.
-    const DIGIT_SUFFIX_PREFIXES: &[&str] = &["MD", "RM", "SM", "SH", "NA"];
+    const DIGIT_SUFFIX_PREFIXES: &[&str] =
+        &["MD", "RM", "SM", "SH", "NA", "AN", "PA", "RA", "RT", "XT"];
 
     let prefix_end = if DIGIT_SUFFIX_PREFIXES.contains(&alpha_prefix)
         && alpha_end < body_str.len()

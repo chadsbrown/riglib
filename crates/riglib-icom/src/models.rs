@@ -52,6 +52,20 @@ pub struct IcomModel {
     pub default_baud_rate: u32,
     /// Full capability description for this model.
     pub capabilities: RigCapabilities,
+    /// Whether AGC off is controlled via the time constant command (0x1A 0x04).
+    ///
+    /// SDR-generation Icom rigs (IC-7300, IC-7610, IC-9700, IC-705, IC-7300MK2,
+    /// IC-905) do not support AGC off via the standard mode command (0x16 0x12).
+    /// Instead, setting the AGC time constant to zero disables AGC. Older rigs
+    /// (IC-7600, IC-7700, IC-7800, IC-785x, etc.) use mode byte 0x00 for off.
+    pub has_agc_time_constant: bool,
+    /// Whether the rig supports Preamp 2 (a second, higher-gain preamp stage).
+    ///
+    /// All supported Icom rigs have at least Preamp 1. Higher-end models
+    /// (IC-7600, IC-7700, IC-7800, IC-7850, IC-7851, IC-7610) also support
+    /// Preamp 2. Entry-level and portable rigs (IC-7300, IC-7300MK2, IC-705,
+    /// IC-7100, IC-9100, IC-7410, IC-9700, IC-905) only have Preamp 1.
+    pub has_preamp2: bool,
 }
 
 impl From<&IcomModel> for RigDefinition {
@@ -129,6 +143,8 @@ pub fn ic_7600() -> IcomModel {
         model_id: "0x7A",
         default_civ_address: 0x7A,
         default_baud_rate: 19_200,
+        has_agc_time_constant: false,
+        has_preamp2: true,
         capabilities: RigCapabilities {
             max_receivers: 1,
             has_sub_receiver: false,
@@ -138,6 +154,10 @@ pub fn ic_7600() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -161,6 +181,8 @@ pub fn ic_7700() -> IcomModel {
         model_id: "0x74",
         default_civ_address: 0x74,
         default_baud_rate: 19_200,
+        has_agc_time_constant: false,
+        has_preamp2: true,
         capabilities: RigCapabilities {
             max_receivers: 2,
             has_sub_receiver: true,
@@ -170,6 +192,10 @@ pub fn ic_7700() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 200.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -192,6 +218,8 @@ pub fn ic_7800() -> IcomModel {
         model_id: "0x6A",
         default_civ_address: 0x6A,
         default_baud_rate: 19_200,
+        has_agc_time_constant: false,
+        has_preamp2: true,
         capabilities: RigCapabilities {
             max_receivers: 2,
             has_sub_receiver: true,
@@ -201,6 +229,10 @@ pub fn ic_7800() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 200.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -225,6 +257,8 @@ pub fn ic_7850() -> IcomModel {
         model_id: "0x8E",
         default_civ_address: 0x8E,
         default_baud_rate: 115_200,
+        has_agc_time_constant: false,
+        has_preamp2: true,
         capabilities: RigCapabilities {
             max_receivers: 2,
             has_sub_receiver: true,
@@ -234,6 +268,10 @@ pub fn ic_7850() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 200.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -257,6 +295,8 @@ pub fn ic_7851() -> IcomModel {
         model_id: "0x8E",
         default_civ_address: 0x8E,
         default_baud_rate: 115_200,
+        has_agc_time_constant: false,
+        has_preamp2: true,
         capabilities: RigCapabilities {
             max_receivers: 2,
             has_sub_receiver: true,
@@ -266,6 +306,10 @@ pub fn ic_7851() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 200.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -291,6 +335,8 @@ pub fn ic_7300() -> IcomModel {
         model_id: "0x94",
         default_civ_address: 0x94,
         default_baud_rate: 115_200,
+        has_agc_time_constant: true,
+        has_preamp2: false,
         capabilities: RigCapabilities {
             max_receivers: 1,
             has_sub_receiver: false,
@@ -300,6 +346,10 @@ pub fn ic_7300() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -324,6 +374,8 @@ pub fn ic_7610() -> IcomModel {
         model_id: "0x98",
         default_civ_address: 0x98,
         default_baud_rate: 115_200,
+        has_agc_time_constant: true,
+        has_preamp2: true,
         capabilities: RigCapabilities {
             max_receivers: 2,
             has_sub_receiver: true,
@@ -351,6 +403,10 @@ pub fn ic_7610() -> IcomModel {
                 BandRange::new(1_800_000, 54_000_000),
             ],
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -374,6 +430,8 @@ pub fn ic_9700() -> IcomModel {
         model_id: "0xA2",
         default_civ_address: 0xA2,
         default_baud_rate: 115_200,
+        has_agc_time_constant: true,
+        has_preamp2: false,
         capabilities: RigCapabilities {
             max_receivers: 2,
             has_sub_receiver: true,
@@ -388,6 +446,10 @@ pub fn ic_9700() -> IcomModel {
             ],
             // Max power on the highest-power band (VHF).
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -412,6 +474,8 @@ pub fn ic_705() -> IcomModel {
         model_id: "0xA4",
         default_civ_address: 0xA4,
         default_baud_rate: 115_200,
+        has_agc_time_constant: true,
+        has_preamp2: false,
         capabilities: RigCapabilities {
             max_receivers: 1,
             has_sub_receiver: false,
@@ -425,6 +489,10 @@ pub fn ic_705() -> IcomModel {
                 BandRange::new(420_000_000, 450_000_000),
             ],
             max_power_watts: 10.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -448,6 +516,8 @@ pub fn ic_7300mk2() -> IcomModel {
         model_id: "0xA6",
         default_civ_address: 0xA6,
         default_baud_rate: 115_200,
+        has_agc_time_constant: true,
+        has_preamp2: false,
         capabilities: RigCapabilities {
             max_receivers: 1,
             has_sub_receiver: false,
@@ -457,6 +527,10 @@ pub fn ic_7300mk2() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -481,6 +555,8 @@ pub fn ic_7100() -> IcomModel {
         model_id: "0x88",
         default_civ_address: 0x88,
         default_baud_rate: 19_200,
+        has_agc_time_constant: false,
+        has_preamp2: false,
         capabilities: RigCapabilities {
             max_receivers: 1,
             has_sub_receiver: false,
@@ -495,6 +571,10 @@ pub fn ic_7100() -> IcomModel {
             ],
             // Max power on HF/6m band.
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -518,6 +598,8 @@ pub fn ic_9100() -> IcomModel {
         model_id: "0x7C",
         default_civ_address: 0x7C,
         default_baud_rate: 19_200,
+        has_agc_time_constant: false,
+        has_preamp2: false,
         capabilities: RigCapabilities {
             max_receivers: 1,
             has_sub_receiver: false,
@@ -531,6 +613,10 @@ pub fn ic_9100() -> IcomModel {
                 BandRange::new(420_000_000, 450_000_000),
             ],
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -554,6 +640,8 @@ pub fn ic_7410() -> IcomModel {
         model_id: "0x80",
         default_civ_address: 0x80,
         default_baud_rate: 19_200,
+        has_agc_time_constant: false,
+        has_preamp2: false,
         capabilities: RigCapabilities {
             max_receivers: 1,
             has_sub_receiver: false,
@@ -563,6 +651,10 @@ pub fn ic_7410() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -587,6 +679,8 @@ pub fn ic_905() -> IcomModel {
         model_id: "0xAC",
         default_civ_address: 0xAC,
         default_baud_rate: 115_200,
+        has_agc_time_constant: true,
+        has_preamp2: false,
         capabilities: RigCapabilities {
             max_receivers: 1,
             has_sub_receiver: false,
@@ -602,6 +696,10 @@ pub fn ic_905() -> IcomModel {
                 BandRange::new(5_650_000_000, 5_850_000_000),
             ],
             max_power_watts: 10.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
     }
 }
@@ -1230,5 +1328,32 @@ mod tests {
     fn all_models_count() {
         let models = all_icom_models();
         assert_eq!(models.len(), 14, "expected 14 Icom models");
+    }
+
+    #[test]
+    fn all_models_have_rit_xit() {
+        for model in all_icom_models() {
+            assert!(
+                model.capabilities.has_rit,
+                "{} should have RIT",
+                model.name
+            );
+            assert!(
+                model.capabilities.has_xit,
+                "{} should have XIT",
+                model.name
+            );
+        }
+    }
+
+    #[test]
+    fn all_models_have_cw_messages() {
+        for model in all_icom_models() {
+            assert!(
+                model.capabilities.has_cw_messages,
+                "{} should support CW messages",
+                model.name
+            );
+        }
     }
 }

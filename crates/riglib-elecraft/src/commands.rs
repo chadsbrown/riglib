@@ -233,6 +233,253 @@ pub fn cmd_set_ai(on: bool) -> Vec<u8> {
     }
 }
 
+/// Build a "read CW keyer speed" command (`KS;`).
+///
+/// Response is `KS{speed:03};` where speed is 008-060 WPM.
+pub fn cmd_read_cw_speed() -> Vec<u8> {
+    encode_command("KS", "")
+}
+
+/// Build a "set CW keyer speed" command (`KS{speed:03};`).
+///
+/// Speed is encoded as exactly 3 zero-padded ASCII digits in WPM.
+///
+/// # Arguments
+///
+/// * `wpm` - Keyer speed in words per minute (typically 8-60).
+pub fn cmd_set_cw_speed(wpm: u8) -> Vec<u8> {
+    encode_command("KS", &format!("{wpm:03}"))
+}
+
+/// Build a "VFO A=B" command (`SWT11;`).
+///
+/// On Elecraft K3/K4, `SWT11;` triggers the A=B function (copies the
+/// active VFO to the inactive VFO). This is equivalent to pressing the
+/// A=B button on the front panel.
+pub fn cmd_vfo_a_eq_b() -> Vec<u8> {
+    encode_command("SWT", "11")
+}
+
+/// Build a "VFO swap" command (`SWT00;`).
+///
+/// On Elecraft K3/K4, `SWT00;` triggers the A/B swap function (exchanges
+/// VFO A and VFO B). This is equivalent to pressing the A/B button.
+pub fn cmd_vfo_swap() -> Vec<u8> {
+    encode_command("SWT", "00")
+}
+
+// ---------------------------------------------------------------
+// Command builders -- AGC
+// ---------------------------------------------------------------
+
+/// Build a "read AGC" command for K3-family (`GT;`).
+///
+/// Response is `GTnnnx;` where:
+/// - `nnn` = 3-digit speed value (002=fast, 004=slow)
+/// - `x` = AGC on/off flag (0=off, 1=on) in K22 extended mode
+///
+/// On non-K22 firmware, the response may be `GTnnn;` (3 digits only).
+pub fn cmd_read_agc_k3() -> Vec<u8> {
+    encode_command("GT", "")
+}
+
+/// Build a "set AGC" command for K3-family (`GTnnnx;`).
+///
+/// Uses K22 extended format with AGC on/off flag.
+///
+/// # Arguments
+///
+/// * `speed` - Speed value: 002=fast, 004=slow
+/// * `agc_on` - `true` for AGC on, `false` for AGC off
+pub fn cmd_set_agc_k3(speed: u16, agc_on: bool) -> Vec<u8> {
+    let on_off = if agc_on { "1" } else { "0" };
+    encode_command("GT", &format!("{speed:03}{on_off}"))
+}
+
+/// Build a "read AGC" command for K4 (`GT$;`).
+///
+/// Response is `GT$n;` where n is: 0=Off, 1=Slow, 2=Fast.
+pub fn cmd_read_agc_k4() -> Vec<u8> {
+    encode_command("GT", "$")
+}
+
+/// Build a "set AGC" command for K4 (`GT${value};`).
+///
+/// # Arguments
+///
+/// * `value` - AGC mode: 0=Off, 1=Slow, 2=Fast
+pub fn cmd_set_agc_k4(value: u8) -> Vec<u8> {
+    encode_command("GT", &format!("${value}"))
+}
+
+// ---------------------------------------------------------------
+// Command builders -- Preamp / Attenuator
+// ---------------------------------------------------------------
+
+/// Build a "read preamp" command (`PA;`).
+///
+/// Reads the current preamp setting. Response is `PA{level};` where level
+/// is: 0=Off, 1=On.
+pub fn cmd_read_preamp() -> Vec<u8> {
+    encode_command("PA", "")
+}
+
+/// Build a "set preamp" command (`PA{level};`).
+///
+/// # Arguments
+///
+/// * `level` - Preamp level: 0=Off, 1=On
+pub fn cmd_set_preamp(level: u8) -> Vec<u8> {
+    encode_command("PA", &format!("{level}"))
+}
+
+/// Build a "read attenuator" command for K3-family (`RA;`).
+///
+/// Response is `RA{level:02};` where level is a 2-digit value.
+pub fn cmd_read_attenuator_k3() -> Vec<u8> {
+    encode_command("RA", "")
+}
+
+/// Build a "set attenuator" command for K3-family (`RA{level:02};`).
+///
+/// # Arguments
+///
+/// * `level` - Attenuator level as a 2-digit value (e.g. 0=Off, model-dependent)
+pub fn cmd_set_attenuator_k3(level: u8) -> Vec<u8> {
+    encode_command("RA", &format!("{level:02}"))
+}
+
+/// Build a "read attenuator" command for K4 (`RA$;`).
+///
+/// Response is `RA${level};` where level is a single digit.
+pub fn cmd_read_attenuator_k4() -> Vec<u8> {
+    encode_command("RA", "$")
+}
+
+/// Build a "set attenuator" command for K4 (`RA${level};`).
+///
+/// # Arguments
+///
+/// * `level` - Attenuator level as a single digit value
+pub fn cmd_set_attenuator_k4(level: u8) -> Vec<u8> {
+    encode_command("RA", &format!("${level}"))
+}
+
+// ---------------------------------------------------------------
+// Command builders -- RIT / XIT
+// ---------------------------------------------------------------
+
+/// Build a "read RIT state" command (`RT;`).
+///
+/// Response is `RT0;` (RIT off) or `RT1;` (RIT on).
+pub fn cmd_read_rit() -> Vec<u8> {
+    encode_command("RT", "")
+}
+
+/// Build a "set RIT on/off" command.
+///
+/// - `RT1;` enables RIT.
+/// - `RT0;` disables RIT.
+///
+/// # Arguments
+///
+/// * `on` - `true` to enable RIT, `false` to disable.
+pub fn cmd_set_rit_on(on: bool) -> Vec<u8> {
+    if on {
+        encode_command("RT", "1")
+    } else {
+        encode_command("RT", "0")
+    }
+}
+
+/// Build a "read XIT state" command (`XT;`).
+///
+/// Response is `XT0;` (XIT off) or `XT1;` (XIT on).
+pub fn cmd_read_xit() -> Vec<u8> {
+    encode_command("XT", "")
+}
+
+/// Build a "set XIT on/off" command.
+///
+/// - `XT1;` enables XIT.
+/// - `XT0;` disables XIT.
+///
+/// # Arguments
+///
+/// * `on` - `true` to enable XIT, `false` to disable.
+pub fn cmd_set_xit_on(on: bool) -> Vec<u8> {
+    if on {
+        encode_command("XT", "1")
+    } else {
+        encode_command("XT", "0")
+    }
+}
+
+/// Build a "read RIT/XIT offset" command (`RO;`).
+///
+/// Response is `RO{+/-}{offset:05};` where the offset is a signed
+/// 5-digit value in hertz. K3/K3S range is +/-9999 Hz.
+pub fn cmd_read_rit_xit_offset() -> Vec<u8> {
+    encode_command("RO", "")
+}
+
+/// Build a "RIT up" command (`RU;`).
+///
+/// Increments the RIT/XIT offset by one step.
+pub fn cmd_rit_up() -> Vec<u8> {
+    encode_command("RU", "")
+}
+
+/// Build a "RIT down" command (`RD;`).
+///
+/// Decrements the RIT/XIT offset by one step.
+pub fn cmd_rit_down() -> Vec<u8> {
+    encode_command("RD", "")
+}
+
+/// Build a "RIT clear" command (`RC;`).
+///
+/// Resets the RIT/XIT offset to zero.
+pub fn cmd_rit_clear() -> Vec<u8> {
+    encode_command("RC", "")
+}
+
+// ---------------------------------------------------------------
+// CW message commands
+// ---------------------------------------------------------------
+
+/// Build a "send CW message" command (`KY {text};`).
+///
+/// The text field is a fixed 24-character field, right-padded with spaces.
+/// If `text` is longer than 24 characters it is truncated to 24. A single
+/// space separator precedes the 24-character payload (total parameter length
+/// is 25 characters).
+///
+/// # Arguments
+///
+/// * `text` - The CW message text to send (up to 24 characters).
+pub fn cmd_send_cw_message(text: &str) -> Vec<u8> {
+    let truncated = if text.len() > 24 { &text[..24] } else { text };
+    let padded = format!("{truncated:<24}");
+    encode_command("KY", &format!(" {padded}"))
+}
+
+/// Build a "read CW buffer status" command (`KY;`).
+///
+/// Queries whether the rig's CW message buffer can accept more text.
+/// Response data is `"0"` (buffer ready) or `"1"` (buffer full).
+pub fn cmd_read_cw_buffer() -> Vec<u8> {
+    encode_command("KY", "")
+}
+
+/// Build a "stop CW message" command.
+///
+/// Sends `KY` followed by 25 spaces (1 separator + 24 space payload),
+/// which instructs the rig to stop sending the current CW message.
+pub fn cmd_stop_cw_message() -> Vec<u8> {
+    encode_command("KY", &" ".repeat(25))
+}
+
 // ---------------------------------------------------------------
 // Command builders -- Elecraft extensions
 // ---------------------------------------------------------------
@@ -401,6 +648,26 @@ pub fn parse_power_response(data: &str) -> Result<u16> {
     Ok(val)
 }
 
+/// Parse a CW speed response from the data portion of a `KS` response.
+///
+/// Expects a 3-character numeric string (008-060) representing speed in WPM.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data cannot be parsed.
+pub fn parse_cw_speed_response(data: &str) -> Result<u8> {
+    if data.len() != 3 {
+        return Err(Error::Protocol(format!(
+            "expected 3 digits for CW speed, got {} characters: {data:?}",
+            data.len()
+        )));
+    }
+    let val: u8 = data
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid CW speed digits: {data:?} ({e})")))?;
+    Ok(val)
+}
+
 /// Parse a VFO select response from the data portion of an `FR` or `FT` response.
 ///
 /// - `"0"` = VFO A
@@ -422,6 +689,122 @@ pub fn parse_vfo_response(data: &str) -> Result<bool> {
         "1" => Ok(true),  // VFO B
         _ => Err(Error::Protocol(format!("unexpected VFO state: {data:?}"))),
     }
+}
+
+/// Parse an AGC response from the data portion of a K3-family `GT` response.
+///
+/// Handles both 3-character (`GTnnn;`) and 4-character K22 (`GTnnnx;`)
+/// formats.
+///
+/// Returns `(speed, agc_on)`:
+/// - `speed` - 3-digit value (002=fast, 004=slow)
+/// - `agc_on` - `true` if AGC is on. For non-K22 (3-char) responses,
+///   always returns `true` (AGC assumed on since off is not indicated).
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data cannot be parsed.
+pub fn parse_agc_response_k3(data: &str) -> Result<(u16, bool)> {
+    if data.len() != 3 && data.len() != 4 {
+        return Err(Error::Protocol(format!(
+            "expected 3 or 4 characters for K3 AGC response, got {} characters: {data:?}",
+            data.len()
+        )));
+    }
+    let speed: u16 = data[0..3]
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid AGC speed value: {:?} ({e})", &data[0..3])))?;
+    let agc_on = if data.len() == 4 {
+        &data[3..4] == "1"
+    } else {
+        true
+    };
+    Ok((speed, agc_on))
+}
+
+/// Parse an AGC response from the data portion of a K4 `GT` response.
+///
+/// Expects `$n` where n is: 0=Off, 1=Slow, 2=Fast.
+///
+/// Returns the raw mode value (0-2).
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data cannot be parsed.
+pub fn parse_agc_response_k4(data: &str) -> Result<u8> {
+    if data.len() != 2 || !data.starts_with('$') {
+        return Err(Error::Protocol(format!(
+            "expected '$n' for K4 AGC response, got: {data:?}"
+        )));
+    }
+    let val: u8 = data[1..2]
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid K4 AGC mode digit: {:?} ({e})", &data[1..2])))?;
+    Ok(val)
+}
+
+/// Parse a preamp response from the data portion of a `PA` response.
+///
+/// Expects a single character (digit `0` or `1`) representing the preamp state:
+/// 0=Off, 1=On.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data cannot be parsed.
+pub fn parse_preamp_response(data: &str) -> Result<u8> {
+    if data.len() != 1 {
+        return Err(Error::Protocol(format!(
+            "expected 1 digit for preamp response, got {} characters: {data:?}",
+            data.len()
+        )));
+    }
+    let val: u8 = data
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid preamp level: {data:?} ({e})")))?;
+    Ok(val)
+}
+
+/// Parse an attenuator response from the data portion of a K3-family `RA` response.
+///
+/// Expects 2 characters representing the attenuator level.
+///
+/// Returns the raw level value.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data cannot be parsed.
+pub fn parse_attenuator_response_k3(data: &str) -> Result<u8> {
+    if data.len() != 2 {
+        return Err(Error::Protocol(format!(
+            "expected 2 characters for K3 attenuator response, got {} characters: {data:?}",
+            data.len()
+        )));
+    }
+    let val: u8 = data
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid K3 attenuator level: {data:?} ({e})")))?;
+    Ok(val)
+}
+
+/// Parse an attenuator response from the data portion of a K4 `RA` response.
+///
+/// Expects `$n` where n is a single digit attenuator level.
+///
+/// Returns the raw level value.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data cannot be parsed.
+pub fn parse_attenuator_response_k4(data: &str) -> Result<u8> {
+    if data.len() != 2 || !data.starts_with('$') {
+        return Err(Error::Protocol(format!(
+            "expected '$n' for K4 attenuator response, got: {data:?}"
+        )));
+    }
+    let val: u8 = data[1..2]
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid K4 attenuator level: {:?} ({e})", &data[1..2])))?;
+    Ok(val)
 }
 
 /// Parse a bandwidth response from the data portion of a `BW` or `FW` response.
@@ -451,6 +834,115 @@ pub fn parse_bandwidth_response(data: &str) -> Result<u32> {
         .parse()
         .map_err(|e| Error::Protocol(format!("invalid bandwidth digits: {data:?} ({e})")))?;
     Ok(val)
+}
+
+/// Parse a RIT response from the data portion of an `RT` response.
+///
+/// Expects a single character: `"0"` (RIT off) or `"1"` (RIT on).
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if `data` is empty or not a valid state.
+pub fn parse_rit_response(data: &str) -> Result<bool> {
+    if data.is_empty() {
+        return Err(Error::Protocol(
+            "expected RIT state digit, got empty data".into(),
+        ));
+    }
+    match data {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(Error::Protocol(format!("unexpected RIT state: {data:?}"))),
+    }
+}
+
+/// Parse a XIT response from the data portion of an `XT` response.
+///
+/// Expects a single character: `"0"` (XIT off) or `"1"` (XIT on).
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if `data` is empty or not a valid state.
+pub fn parse_xit_response(data: &str) -> Result<bool> {
+    if data.is_empty() {
+        return Err(Error::Protocol(
+            "expected XIT state digit, got empty data".into(),
+        ));
+    }
+    match data {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(Error::Protocol(format!("unexpected XIT state: {data:?}"))),
+    }
+}
+
+/// Parse a RIT/XIT offset response from the data portion of an `RO` response.
+///
+/// Elecraft returns the shared RIT/XIT offset as `+XXXXX` or `-XXXXX` where
+/// `XXXXX` is a 5-digit absolute offset in hertz. K3/K3S range is +/-9999 Hz.
+///
+/// After prefix splitting by the protocol decoder, the data portion has the
+/// format `+XXXXX` or `-XXXXX` (6 characters total: sign + 5 digits).
+///
+/// # Returns
+///
+/// The signed offset in hertz.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data does not match the expected format.
+pub fn parse_rit_xit_offset_response(data: &str) -> Result<i32> {
+    if data.len() != 6 {
+        return Err(Error::Protocol(format!(
+            "expected 6 characters for RIT/XIT offset response, got {} characters: {data:?}",
+            data.len()
+        )));
+    }
+
+    let sign = match &data[0..1] {
+        "+" => 1i32,
+        "-" => -1i32,
+        other => {
+            return Err(Error::Protocol(format!(
+                "expected + or - for RIT/XIT offset sign, got {other:?}"
+            )));
+        }
+    };
+
+    let digits = &data[1..6];
+    let abs_offset: i32 = digits.parse().map_err(|e| {
+        Error::Protocol(format!(
+            "invalid RIT/XIT offset digits: {digits:?} ({e})"
+        ))
+    })?;
+
+    Ok(sign * abs_offset)
+}
+
+/// Parse a CW buffer status response from the data portion of a `KY` response.
+///
+/// The rig responds with a single character indicating buffer state:
+/// - `"0"` = buffer can accept more text (ready).
+/// - `"1"` = buffer is full.
+///
+/// Returns `true` if the buffer is ready to accept text, `false` if full.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if `data` is empty or contains an unexpected value.
+pub fn parse_cw_buffer_response(data: &str) -> Result<bool> {
+    if data.is_empty() {
+        return Err(Error::Protocol(
+            "expected CW buffer status digit, got empty data".into(),
+        ));
+    }
+    match data {
+        "0" => Ok(true),  // buffer ready
+        "1" => Ok(false), // buffer full
+        _ => Err(Error::Protocol(format!(
+            "unexpected CW buffer status: {data:?}"
+        ))),
+    }
 }
 
 // ---------------------------------------------------------------
@@ -746,6 +1238,254 @@ mod tests {
         assert_eq!(cmd_set_ai(false), b"AI0;");
     }
 
+    #[test]
+    fn cmd_read_cw_speed_bytes() {
+        assert_eq!(cmd_read_cw_speed(), b"KS;");
+    }
+
+    #[test]
+    fn cmd_set_cw_speed_25wpm() {
+        assert_eq!(cmd_set_cw_speed(25), b"KS025;");
+    }
+
+    #[test]
+    fn cmd_set_cw_speed_8wpm() {
+        assert_eq!(cmd_set_cw_speed(8), b"KS008;");
+    }
+
+    #[test]
+    fn cmd_vfo_a_eq_b_bytes() {
+        assert_eq!(cmd_vfo_a_eq_b(), b"SWT11;");
+    }
+
+    #[test]
+    fn cmd_vfo_swap_bytes() {
+        assert_eq!(cmd_vfo_swap(), b"SWT00;");
+    }
+
+    // ---------------------------------------------------------------
+    // AGC commands — K3-family
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_agc_k3_bytes() {
+        assert_eq!(cmd_read_agc_k3(), b"GT;");
+    }
+
+    #[test]
+    fn cmd_set_agc_k3_fast_on() {
+        assert_eq!(cmd_set_agc_k3(2, true), b"GT0021;");
+    }
+
+    #[test]
+    fn cmd_set_agc_k3_slow_on() {
+        assert_eq!(cmd_set_agc_k3(4, true), b"GT0041;");
+    }
+
+    #[test]
+    fn cmd_set_agc_k3_fast_off() {
+        assert_eq!(cmd_set_agc_k3(2, false), b"GT0020;");
+    }
+
+    // ---------------------------------------------------------------
+    // AGC commands — K4
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_agc_k4_bytes() {
+        assert_eq!(cmd_read_agc_k4(), b"GT$;");
+    }
+
+    #[test]
+    fn cmd_set_agc_k4_off() {
+        assert_eq!(cmd_set_agc_k4(0), b"GT$0;");
+    }
+
+    #[test]
+    fn cmd_set_agc_k4_slow() {
+        assert_eq!(cmd_set_agc_k4(1), b"GT$1;");
+    }
+
+    #[test]
+    fn cmd_set_agc_k4_fast() {
+        assert_eq!(cmd_set_agc_k4(2), b"GT$2;");
+    }
+
+    // ---------------------------------------------------------------
+    // Response parsing — AGC
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_agc_k3_fast_on() {
+        let (speed, on) = parse_agc_response_k3("0021").unwrap();
+        assert_eq!(speed, 2);
+        assert!(on);
+    }
+
+    #[test]
+    fn parse_agc_k3_slow_on() {
+        let (speed, on) = parse_agc_response_k3("0041").unwrap();
+        assert_eq!(speed, 4);
+        assert!(on);
+    }
+
+    #[test]
+    fn parse_agc_k3_fast_off() {
+        let (speed, on) = parse_agc_response_k3("0020").unwrap();
+        assert_eq!(speed, 2);
+        assert!(!on);
+    }
+
+    #[test]
+    fn parse_agc_k3_non_k22() {
+        // Non-K22 firmware: 3 digits only, AGC assumed on
+        let (speed, on) = parse_agc_response_k3("002").unwrap();
+        assert_eq!(speed, 2);
+        assert!(on);
+    }
+
+    #[test]
+    fn parse_agc_k3_wrong_length() {
+        assert!(parse_agc_response_k3("00").is_err());
+        assert!(parse_agc_response_k3("00211").is_err());
+    }
+
+    #[test]
+    fn parse_agc_k4_off() {
+        assert_eq!(parse_agc_response_k4("$0").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_agc_k4_slow() {
+        assert_eq!(parse_agc_response_k4("$1").unwrap(), 1);
+    }
+
+    #[test]
+    fn parse_agc_k4_fast() {
+        assert_eq!(parse_agc_response_k4("$2").unwrap(), 2);
+    }
+
+    #[test]
+    fn parse_agc_k4_missing_dollar() {
+        assert!(parse_agc_response_k4("02").is_err());
+    }
+
+    #[test]
+    fn parse_agc_k4_wrong_length() {
+        assert!(parse_agc_response_k4("$").is_err());
+        assert!(parse_agc_response_k4("$01").is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Preamp commands
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_preamp_bytes() {
+        assert_eq!(cmd_read_preamp(), b"PA;");
+    }
+
+    #[test]
+    fn cmd_set_preamp_off() {
+        assert_eq!(cmd_set_preamp(0), b"PA0;");
+    }
+
+    #[test]
+    fn cmd_set_preamp_on() {
+        assert_eq!(cmd_set_preamp(1), b"PA1;");
+    }
+
+    #[test]
+    fn parse_preamp_off() {
+        assert_eq!(parse_preamp_response("0").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_preamp_on() {
+        assert_eq!(parse_preamp_response("1").unwrap(), 1);
+    }
+
+    #[test]
+    fn parse_preamp_wrong_length() {
+        assert!(parse_preamp_response("").is_err());
+        assert!(parse_preamp_response("01").is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Attenuator commands — K3-family
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_attenuator_k3_bytes() {
+        assert_eq!(cmd_read_attenuator_k3(), b"RA;");
+    }
+
+    #[test]
+    fn cmd_set_attenuator_k3_off() {
+        assert_eq!(cmd_set_attenuator_k3(0), b"RA00;");
+    }
+
+    #[test]
+    fn cmd_set_attenuator_k3_on() {
+        assert_eq!(cmd_set_attenuator_k3(10), b"RA10;");
+    }
+
+    #[test]
+    fn parse_attenuator_k3_off() {
+        assert_eq!(parse_attenuator_response_k3("00").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_attenuator_k3_on() {
+        assert_eq!(parse_attenuator_response_k3("10").unwrap(), 10);
+    }
+
+    #[test]
+    fn parse_attenuator_k3_wrong_length() {
+        assert!(parse_attenuator_response_k3("0").is_err());
+        assert!(parse_attenuator_response_k3("001").is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Attenuator commands — K4
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_attenuator_k4_bytes() {
+        assert_eq!(cmd_read_attenuator_k4(), b"RA$;");
+    }
+
+    #[test]
+    fn cmd_set_attenuator_k4_off() {
+        assert_eq!(cmd_set_attenuator_k4(0), b"RA$0;");
+    }
+
+    #[test]
+    fn cmd_set_attenuator_k4_on() {
+        assert_eq!(cmd_set_attenuator_k4(1), b"RA$1;");
+    }
+
+    #[test]
+    fn parse_attenuator_k4_off() {
+        assert_eq!(parse_attenuator_response_k4("$0").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_attenuator_k4_on() {
+        assert_eq!(parse_attenuator_response_k4("$1").unwrap(), 1);
+    }
+
+    #[test]
+    fn parse_attenuator_k4_missing_dollar() {
+        assert!(parse_attenuator_response_k4("01").is_err());
+    }
+
+    #[test]
+    fn parse_attenuator_k4_wrong_length() {
+        assert!(parse_attenuator_response_k4("$").is_err());
+        assert!(parse_attenuator_response_k4("$01").is_err());
+    }
+
     // ---------------------------------------------------------------
     // Elecraft-specific command builders
     // ---------------------------------------------------------------
@@ -1036,6 +1776,30 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // Response parsing -- CW speed
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_cw_speed_25() {
+        assert_eq!(parse_cw_speed_response("025").unwrap(), 25);
+    }
+
+    #[test]
+    fn parse_cw_speed_8() {
+        assert_eq!(parse_cw_speed_response("008").unwrap(), 8);
+    }
+
+    #[test]
+    fn parse_cw_speed_max() {
+        assert_eq!(parse_cw_speed_response("060").unwrap(), 60);
+    }
+
+    #[test]
+    fn parse_cw_speed_wrong_length() {
+        assert!(parse_cw_speed_response("25").is_err());
+    }
+
+    // ---------------------------------------------------------------
     // Response parsing -- VFO select
     // ---------------------------------------------------------------
 
@@ -1102,6 +1866,208 @@ mod tests {
     #[test]
     fn parse_bandwidth_empty() {
         assert!(parse_bandwidth_response("").is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // RIT/XIT command builders
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_rit_bytes() {
+        assert_eq!(cmd_read_rit(), b"RT;");
+    }
+
+    #[test]
+    fn cmd_set_rit_on_bytes() {
+        assert_eq!(cmd_set_rit_on(true), b"RT1;");
+    }
+
+    #[test]
+    fn cmd_set_rit_off_bytes() {
+        assert_eq!(cmd_set_rit_on(false), b"RT0;");
+    }
+
+    #[test]
+    fn cmd_read_xit_bytes() {
+        assert_eq!(cmd_read_xit(), b"XT;");
+    }
+
+    #[test]
+    fn cmd_set_xit_on_bytes() {
+        assert_eq!(cmd_set_xit_on(true), b"XT1;");
+    }
+
+    #[test]
+    fn cmd_set_xit_off_bytes() {
+        assert_eq!(cmd_set_xit_on(false), b"XT0;");
+    }
+
+    #[test]
+    fn cmd_read_rit_xit_offset_bytes() {
+        assert_eq!(cmd_read_rit_xit_offset(), b"RO;");
+    }
+
+    #[test]
+    fn cmd_rit_up_bytes() {
+        assert_eq!(cmd_rit_up(), b"RU;");
+    }
+
+    #[test]
+    fn cmd_rit_down_bytes() {
+        assert_eq!(cmd_rit_down(), b"RD;");
+    }
+
+    #[test]
+    fn cmd_rit_clear_bytes() {
+        assert_eq!(cmd_rit_clear(), b"RC;");
+    }
+
+    // ---------------------------------------------------------------
+    // Response parsing -- RIT state
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_rit_off() {
+        assert!(!parse_rit_response("0").unwrap());
+    }
+
+    #[test]
+    fn parse_rit_on() {
+        assert!(parse_rit_response("1").unwrap());
+    }
+
+    #[test]
+    fn parse_rit_empty() {
+        assert!(parse_rit_response("").is_err());
+    }
+
+    #[test]
+    fn parse_rit_invalid() {
+        assert!(parse_rit_response("2").is_err());
+    }
+
+    #[test]
+    fn parse_rit_too_long() {
+        assert!(parse_rit_response("01").is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Response parsing -- XIT state
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_xit_off() {
+        assert!(!parse_xit_response("0").unwrap());
+    }
+
+    #[test]
+    fn parse_xit_on() {
+        assert!(parse_xit_response("1").unwrap());
+    }
+
+    #[test]
+    fn parse_xit_empty() {
+        assert!(parse_xit_response("").is_err());
+    }
+
+    #[test]
+    fn parse_xit_invalid() {
+        assert!(parse_xit_response("2").is_err());
+    }
+
+    #[test]
+    fn parse_xit_too_long() {
+        assert!(parse_xit_response("01").is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Response parsing -- RIT/XIT offset
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_offset_positive() {
+        assert_eq!(parse_rit_xit_offset_response("+00050").unwrap(), 50);
+    }
+
+    #[test]
+    fn parse_offset_negative() {
+        assert_eq!(parse_rit_xit_offset_response("-00050").unwrap(), -50);
+    }
+
+    #[test]
+    fn parse_offset_zero_positive() {
+        assert_eq!(parse_rit_xit_offset_response("+00000").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_offset_zero_negative() {
+        // -00000 is still zero
+        assert_eq!(parse_rit_xit_offset_response("-00000").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_offset_max_positive() {
+        assert_eq!(parse_rit_xit_offset_response("+99999").unwrap(), 99999);
+    }
+
+    #[test]
+    fn parse_offset_max_negative() {
+        assert_eq!(parse_rit_xit_offset_response("-99999").unwrap(), -99999);
+    }
+
+    #[test]
+    fn parse_offset_typical_positive() {
+        assert_eq!(parse_rit_xit_offset_response("+00120").unwrap(), 120);
+    }
+
+    #[test]
+    fn parse_offset_typical_negative() {
+        assert_eq!(parse_rit_xit_offset_response("-00300").unwrap(), -300);
+    }
+
+    #[test]
+    fn parse_offset_one_hz_positive() {
+        assert_eq!(parse_rit_xit_offset_response("+00001").unwrap(), 1);
+    }
+
+    #[test]
+    fn parse_offset_one_hz_negative() {
+        assert_eq!(parse_rit_xit_offset_response("-00001").unwrap(), -1);
+    }
+
+    #[test]
+    fn parse_offset_too_short() {
+        assert!(parse_rit_xit_offset_response("+0050").is_err());
+    }
+
+    #[test]
+    fn parse_offset_too_long() {
+        assert!(parse_rit_xit_offset_response("+000500").is_err());
+    }
+
+    #[test]
+    fn parse_offset_empty() {
+        assert!(parse_rit_xit_offset_response("").is_err());
+    }
+
+    #[test]
+    fn parse_offset_wrong_sign() {
+        assert!(parse_rit_xit_offset_response("*00050").is_err());
+    }
+
+    #[test]
+    fn parse_offset_missing_sign() {
+        assert!(parse_rit_xit_offset_response("000050").is_err());
+    }
+
+    #[test]
+    fn parse_offset_non_digits() {
+        assert!(parse_rit_xit_offset_response("+00AB0").is_err());
+    }
+
+    #[test]
+    fn parse_offset_alpha_string() {
+        assert!(parse_rit_xit_offset_response("+hello").is_err());
     }
 
     // ---------------------------------------------------------------
@@ -1197,5 +2163,80 @@ mod tests {
     #[test]
     fn cmd_set_bandwidth_fw_zero_padded() {
         assert_eq!(cmd_set_bandwidth_fw(50), b"FW0050;");
+    }
+
+    // ---------------------------------------------------------------
+    // CW message commands
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_send_cw_message_bytes() {
+        // "TEST" + 20 spaces padding = 24 chars, plus 1 space separator
+        assert_eq!(
+            cmd_send_cw_message("TEST"),
+            b"KY TEST                    ;"
+        );
+    }
+
+    #[test]
+    fn cmd_send_cw_message_empty() {
+        // Empty string pads to 24 spaces
+        assert_eq!(
+            cmd_send_cw_message(""),
+            b"KY                         ;"
+        );
+    }
+
+    #[test]
+    fn cmd_send_cw_message_truncates_at_24() {
+        // 30-char input should truncate to first 24
+        let input = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234";
+        assert_eq!(input.len(), 30);
+        let cmd = cmd_send_cw_message(input);
+        // "KY" + " " + 24 chars + ";"
+        assert_eq!(cmd, b"KY ABCDEFGHIJKLMNOPQRSTUVWX;");
+    }
+
+    #[test]
+    fn cmd_send_cw_message_exact_24() {
+        // Exactly 24-char input has no extra padding
+        let input = "ABCDEFGHIJKLMNOPQRSTUVWX";
+        assert_eq!(input.len(), 24);
+        let cmd = cmd_send_cw_message(input);
+        assert_eq!(cmd, b"KY ABCDEFGHIJKLMNOPQRSTUVWX;");
+    }
+
+    #[test]
+    fn cmd_read_cw_buffer_bytes() {
+        assert_eq!(cmd_read_cw_buffer(), b"KY;");
+    }
+
+    #[test]
+    fn cmd_stop_cw_message_bytes() {
+        // "KY" + 25 spaces + ";"
+        assert_eq!(
+            cmd_stop_cw_message(),
+            b"KY                         ;"
+        );
+    }
+
+    #[test]
+    fn parse_cw_buffer_ready() {
+        assert_eq!(parse_cw_buffer_response("0").unwrap(), true);
+    }
+
+    #[test]
+    fn parse_cw_buffer_full() {
+        assert_eq!(parse_cw_buffer_response("1").unwrap(), false);
+    }
+
+    #[test]
+    fn parse_cw_buffer_invalid() {
+        assert!(parse_cw_buffer_response("2").is_err());
+    }
+
+    #[test]
+    fn parse_cw_buffer_empty() {
+        assert!(parse_cw_buffer_response("").is_err());
     }
 }

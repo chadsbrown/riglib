@@ -22,6 +22,22 @@
 
 use riglib_core::{BandRange, ConnectionType, Manufacturer, Mode, RigCapabilities, RigDefinition};
 
+/// Which AGC command variant a Kenwood model uses.
+///
+/// Kenwood has three distinct AGC protocols across its model line:
+/// - TS-890S uses `GC` with a simple mode byte (0=Off, 1=Slow, 2=Mid, 3=Fast)
+/// - TS-990S uses `GC` with per-VFO addressing (`GC{vfo}{mode}`)
+/// - TS-590S/SG uses `GT` with a 3-digit time constant (000=Off, 005=Fast, 010=Mid, 020=Slow)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgcCommandStyle {
+    /// `GC{mode};` — single mode byte, no VFO parameter (TS-890S).
+    GcSimple,
+    /// `GC{vfo}{mode};` — mode byte with VFO prefix (TS-990S).
+    GcVfo,
+    /// `GT{value:03};` — 3-digit time constant (TS-590S/SG).
+    GtTimeConstant,
+}
+
 /// Static model definition for a Kenwood transceiver.
 ///
 /// Contains all the information needed to communicate with a specific
@@ -47,6 +63,24 @@ pub struct KenwoodModel {
     /// voice and data sub-modes (e.g. USB vs DATA-USB). Older models
     /// like the TS-590S/SG do not have this distinction in the protocol.
     pub has_data_modes: bool,
+    /// Which AGC command variant this model uses.
+    pub agc_command_style: AgcCommandStyle,
+    /// Whether the rig supports a second preamp stage (Preamp 2).
+    ///
+    /// All supported Kenwood rigs have at least Preamp 1. The TS-990S
+    /// also supports Preamp 2. The TS-590S/SG and TS-890S only have
+    /// Preamp 1.
+    pub has_preamp2: bool,
+    /// RIT/XIT step size in hertz per `RU;`/`RD;` command.
+    ///
+    /// Kenwood does not support setting an absolute RIT/XIT offset
+    /// directly. Instead the driver must issue `RC;` (clear) followed
+    /// by repeated `RU;` (up) or `RD;` (down) commands, each of which
+    /// increments or decrements by this step size. The step size is
+    /// model-dependent:
+    /// - TS-590S/SG: 10 Hz per step
+    /// - TS-890S/TS-990S: 1 Hz per step
+    pub rit_step_hz: u16,
 }
 
 impl From<&KenwoodModel> for RigDefinition {
@@ -120,8 +154,15 @@ pub fn ts_590s() -> KenwoodModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
         has_data_modes: false,
+        agc_command_style: AgcCommandStyle::GtTimeConstant,
+        has_preamp2: false,
+        rit_step_hz: 10,
     }
 }
 
@@ -151,8 +192,15 @@ pub fn ts_590sg() -> KenwoodModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
         has_data_modes: false,
+        agc_command_style: AgcCommandStyle::GtTimeConstant,
+        has_preamp2: false,
+        rit_step_hz: 10,
     }
 }
 
@@ -183,8 +231,15 @@ pub fn ts_990s() -> KenwoodModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 200.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
         has_data_modes: true,
+        agc_command_style: AgcCommandStyle::GcVfo,
+        has_preamp2: true,
+        rit_step_hz: 1,
     }
 }
 
@@ -215,8 +270,15 @@ pub fn ts_890s() -> KenwoodModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
         has_data_modes: true,
+        agc_command_style: AgcCommandStyle::GcSimple,
+        has_preamp2: false,
+        rit_step_hz: 1,
     }
 }
 
@@ -514,6 +576,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn all_models_have_cw_messages() {
+        for model in all_kenwood_models() {
+            assert!(
+                model.capabilities.has_cw_messages,
+                "{} should support CW messages",
+                model.name
+            );
+        }
+    }
+
+    #[test]
+    fn all_models_have_rit_xit() {
+        for model in all_kenwood_models() {
+            assert!(
+                model.capabilities.has_rit,
+                "{} should support RIT",
+                model.name
+            );
+            assert!(
+                model.capabilities.has_xit,
+                "{} should support XIT",
+                model.name
+            );
+        }
+    }
+
+    #[test]
+    fn rit_step_hz_values() {
+        assert_eq!(ts_590s().rit_step_hz, 10);
+        assert_eq!(ts_590sg().rit_step_hz, 10);
+        assert_eq!(ts_890s().rit_step_hz, 1);
+        assert_eq!(ts_990s().rit_step_hz, 1);
+    }
+
+    #[test]
+    fn only_990_has_preamp2() {
+        assert!(!ts_590s().has_preamp2);
+        assert!(!ts_590sg().has_preamp2);
+        assert!(ts_990s().has_preamp2);
+        assert!(!ts_890s().has_preamp2);
     }
 
     #[test]

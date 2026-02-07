@@ -4,7 +4,7 @@
 //! when the radio's state changes. Contest loggers and panadapter displays subscribe
 //! to these events for real-time UI updates without polling.
 
-use crate::types::{Mode, ReceiverId};
+use crate::types::{AgcMode, AttenuatorLevel, Mode, PreampLevel, ReceiverId};
 
 /// An event emitted by a rig driver when radio state changes.
 ///
@@ -59,6 +59,52 @@ pub enum RigEvent {
     SwrReading {
         /// Standing wave ratio (e.g. 1.5 means 1.5:1).
         swr: f32,
+    },
+
+    /// The AGC mode of a receiver changed.
+    AgcChanged {
+        /// Which receiver changed AGC mode.
+        receiver: ReceiverId,
+        /// New AGC mode.
+        mode: AgcMode,
+    },
+
+    /// The preamp level of a receiver changed.
+    PreampChanged {
+        /// Which receiver changed preamp level.
+        receiver: ReceiverId,
+        /// New preamp level.
+        level: PreampLevel,
+    },
+
+    /// The attenuator level of a receiver changed.
+    AttenuatorChanged {
+        /// Which receiver changed attenuator level.
+        receiver: ReceiverId,
+        /// New attenuator level.
+        level: AttenuatorLevel,
+    },
+
+    /// The CW keyer speed changed.
+    CwSpeedChanged {
+        /// New speed in words per minute.
+        wpm: u8,
+    },
+
+    /// RIT (Receiver Incremental Tuning) state changed.
+    RitChanged {
+        /// Whether RIT is now enabled.
+        enabled: bool,
+        /// Current RIT offset in hertz (can be negative).
+        offset_hz: i32,
+    },
+
+    /// XIT (Transmitter Incremental Tuning) state changed.
+    XitChanged {
+        /// Whether XIT is now enabled.
+        enabled: bool,
+        /// Current XIT offset in hertz (can be negative).
+        offset_hz: i32,
     },
 
     /// Successfully connected to the rig.

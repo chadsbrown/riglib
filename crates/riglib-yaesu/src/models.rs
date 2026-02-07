@@ -31,6 +31,12 @@ pub struct YaesuModel {
     /// (FT-DX101D/MP) have a true main+sub dual receiver architecture
     /// rather than simple VFO A/B switching.
     pub has_dual_vfo: bool,
+    /// Whether the rig supports Preamp 2 (a second, higher-gain preamp stage).
+    ///
+    /// All supported Yaesu rigs have at least Preamp 1. The FT-DX101D and
+    /// FT-DX101MP also support Preamp 2. Mid-range and entry-level models
+    /// (FT-DX10, FT-891, FT-991A, FT-710) only have Preamp 1.
+    pub has_preamp2: bool,
 }
 
 impl From<&YaesuModel> for RigDefinition {
@@ -99,11 +105,16 @@ pub fn ft_dx10() -> YaesuModel {
             has_split: true,
             has_audio_streaming: false,
             has_iq_output: false,
+            has_rit: true,
+            has_xit: true,
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            has_cw_messages: true,
+            ..Default::default()
         },
         has_dual_vfo: true,
+        has_preamp2: false,
     }
 }
 
@@ -130,11 +141,16 @@ pub fn ft_891() -> YaesuModel {
             has_split: true,
             has_audio_streaming: false,
             has_iq_output: false,
+            has_rit: true,
+            has_xit: true,
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            has_cw_messages: true,
+            ..Default::default()
         },
         has_dual_vfo: true,
+        has_preamp2: false,
     }
 }
 
@@ -160,6 +176,8 @@ pub fn ft_991a() -> YaesuModel {
             has_split: true,
             has_audio_streaming: false,
             has_iq_output: false,
+            has_rit: true,
+            has_xit: true,
             supported_modes: standard_hf_modes(),
             frequency_ranges: vec![
                 // HF + 6m
@@ -170,8 +188,11 @@ pub fn ft_991a() -> YaesuModel {
                 BandRange::new(420_000_000, 450_000_000),
             ],
             max_power_watts: 100.0,
+            has_cw_messages: true,
+            ..Default::default()
         },
         has_dual_vfo: true,
+        has_preamp2: false,
     }
 }
 
@@ -198,11 +219,16 @@ pub fn ft_dx101d() -> YaesuModel {
             has_split: true,
             has_audio_streaming: false,
             has_iq_output: false,
+            has_rit: true,
+            has_xit: true,
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            has_cw_messages: true,
+            ..Default::default()
         },
         has_dual_vfo: true,
+        has_preamp2: true,
     }
 }
 
@@ -228,11 +254,16 @@ pub fn ft_dx101mp() -> YaesuModel {
             has_split: true,
             has_audio_streaming: false,
             has_iq_output: false,
+            has_rit: true,
+            has_xit: true,
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 200.0,
+            has_cw_messages: true,
+            ..Default::default()
         },
         has_dual_vfo: true,
+        has_preamp2: true,
     }
 }
 
@@ -258,11 +289,16 @@ pub fn ft_710() -> YaesuModel {
             has_split: true,
             has_audio_streaming: false,
             has_iq_output: false,
+            has_rit: true,
+            has_xit: true,
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            has_cw_messages: true,
+            ..Default::default()
         },
         has_dual_vfo: true,
+        has_preamp2: false,
     }
 }
 
@@ -579,6 +615,41 @@ mod tests {
                 .iter()
                 .any(|r| r.contains(14_250_000));
             assert!(covers_20m, "{} should cover 20m", model.name);
+        }
+    }
+
+    #[test]
+    fn all_models_have_rit_xit() {
+        let models = [
+            ft_dx10(),
+            ft_891(),
+            ft_991a(),
+            ft_dx101d(),
+            ft_dx101mp(),
+            ft_710(),
+        ];
+        for model in &models {
+            assert!(
+                model.capabilities.has_rit,
+                "{} should support RIT",
+                model.name
+            );
+            assert!(
+                model.capabilities.has_xit,
+                "{} should support XIT",
+                model.name
+            );
+        }
+    }
+
+    #[test]
+    fn all_models_have_cw_messages() {
+        for model in all_yaesu_models() {
+            assert!(
+                model.capabilities.has_cw_messages,
+                "{} should support CW messages",
+                model.name
+            );
         }
     }
 

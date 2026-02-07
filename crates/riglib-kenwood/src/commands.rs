@@ -224,6 +224,141 @@ pub fn cmd_set_ai(on: bool) -> Vec<u8> {
     }
 }
 
+/// Build a "read CW keyer speed" command (`KS;`).
+///
+/// Response is `KS{speed:03};` where speed is 000-060 WPM.
+pub fn cmd_read_cw_speed() -> Vec<u8> {
+    encode_command("KS", "")
+}
+
+/// Build a "set CW keyer speed" command (`KS{speed:03};`).
+///
+/// Speed is encoded as exactly 3 zero-padded ASCII digits in WPM.
+///
+/// # Arguments
+///
+/// * `wpm` - Keyer speed in words per minute (typically 4-60).
+pub fn cmd_set_cw_speed(wpm: u8) -> Vec<u8> {
+    encode_command("KS", &format!("{wpm:03}"))
+}
+
+/// Build a "VFO A=B" command (`AB;`).
+///
+/// Copies the active VFO settings to the inactive VFO.
+pub fn cmd_vfo_a_eq_b() -> Vec<u8> {
+    encode_command("AB", "")
+}
+
+/// Build a "read antenna" command (`AN;`).
+///
+/// Response is `AN{ant};` where ant is a single digit (1 or 2).
+pub fn cmd_read_antenna() -> Vec<u8> {
+    encode_command("AN", "")
+}
+
+/// Build a "set antenna" command (`AN{ant};`).
+///
+/// # Arguments
+///
+/// * `ant` - Antenna number (1 or 2).
+pub fn cmd_set_antenna(ant: u8) -> Vec<u8> {
+    encode_command("AN", &format!("{ant}"))
+}
+
+/// Build a "read AGC mode" command (`GC;`) for TS-890S.
+///
+/// The TS-890S uses the `GC` command for AGC mode control.
+/// Response is `GC{mode};` where mode is: 0=Off, 1=Slow, 2=Medium, 3=Fast.
+///
+/// Note: The TS-990S uses `GC{vfo}{mode};` format — use
+/// [`cmd_read_agc_mode_vfo`] for that model.
+pub fn cmd_read_agc_mode() -> Vec<u8> {
+    encode_command("GC", "")
+}
+
+/// Build a "set AGC mode" command (`GC{value};`) for TS-890S.
+///
+/// # Arguments
+///
+/// * `value` - AGC mode: 0=Off, 1=Slow, 2=Medium, 3=Fast
+pub fn cmd_set_agc_mode(value: u8) -> Vec<u8> {
+    encode_command("GC", &format!("{value}"))
+}
+
+/// Build a "read AGC mode" command with VFO (`GC{vfo};`) for TS-990S.
+///
+/// The TS-990S includes a VFO parameter: 0=main, 1=sub.
+/// Response is `GC{vfo}{mode};`.
+///
+/// # Arguments
+///
+/// * `vfo` - 0 for main receiver, 1 for sub receiver
+pub fn cmd_read_agc_mode_vfo(vfo: u8) -> Vec<u8> {
+    encode_command("GC", &format!("{vfo}"))
+}
+
+/// Build a "set AGC mode" command with VFO (`GC{vfo}{value};`) for TS-990S.
+///
+/// # Arguments
+///
+/// * `vfo` - 0 for main receiver, 1 for sub receiver
+/// * `value` - AGC mode: 0=Off, 1=Slow, 2=Medium, 3=Fast
+pub fn cmd_set_agc_mode_vfo(vfo: u8, value: u8) -> Vec<u8> {
+    encode_command("GC", &format!("{vfo}{value}"))
+}
+
+/// Build a "read AGC time constant" command (`GT;`) for TS-590S/SG.
+///
+/// The TS-590S/SG uses the `GT` command with a 3-digit time constant.
+/// Response is `GT{value:03};` where value maps to AGC modes:
+/// 000=Off, 005=Fast, 010=Medium, 020=Slow.
+pub fn cmd_read_agc_time_constant() -> Vec<u8> {
+    encode_command("GT", "")
+}
+
+/// Build a "set AGC time constant" command (`GT{value:03};`) for TS-590S/SG.
+///
+/// # Arguments
+///
+/// * `value` - Time constant: 0=Off, 5=Fast, 10=Medium, 20=Slow
+pub fn cmd_set_agc_time_constant(value: u8) -> Vec<u8> {
+    encode_command("GT", &format!("{value:03}"))
+}
+
+/// Build a "read preamp" command (`PA;`).
+///
+/// Reads the current preamp setting. Response is `PA{level};` where level
+/// is: 0=Off, 1=Preamp1, 2=Preamp2.
+pub fn cmd_read_preamp() -> Vec<u8> {
+    encode_command("PA", "")
+}
+
+/// Build a "set preamp" command (`PA{level};`).
+///
+/// # Arguments
+///
+/// * `level` - Preamp level: 0=Off, 1=Preamp1, 2=Preamp2
+pub fn cmd_set_preamp(level: u8) -> Vec<u8> {
+    encode_command("PA", &format!("{level}"))
+}
+
+/// Build a "read attenuator" command (`RA;`).
+///
+/// Reads the current attenuator setting. Response is `RA{level:02};` where
+/// level values are model-dependent: 00=Off, 06=6dB, 12=12dB, 18=18dB.
+pub fn cmd_read_attenuator() -> Vec<u8> {
+    encode_command("RA", "")
+}
+
+/// Build a "set attenuator" command (`RA{level:02};`).
+///
+/// # Arguments
+///
+/// * `level` - Attenuator level: 0=Off, 6=6dB, 12=12dB, 18=18dB
+pub fn cmd_set_attenuator(level: u8) -> Vec<u8> {
+    encode_command("RA", &format!("{level:02}"))
+}
+
 /// Build a "read passband width" command (`SH;`).
 ///
 /// Kenwood rigs return the filter/passband width via the `SH` command.
@@ -242,6 +377,140 @@ pub fn cmd_read_passband() -> Vec<u8> {
 /// * `value` - Passband index (model-dependent, typically 00-31).
 pub fn cmd_set_passband(value: u8) -> Vec<u8> {
     encode_command("SH", &format!("{value:02}"))
+}
+
+// ---------------------------------------------------------------
+// RIT / XIT command builders
+// ---------------------------------------------------------------
+
+/// Build a "read RIT state" command (`RT;`).
+///
+/// The response returns `RT0;` (RIT off) or `RT1;` (RIT on).
+pub fn cmd_read_rit() -> Vec<u8> {
+    encode_command("RT", "")
+}
+
+/// Build a "set RIT on/off" command.
+///
+/// - `RT1;` enables RIT.
+/// - `RT0;` disables RIT.
+///
+/// This does not change the offset value, only the on/off state.
+///
+/// # Arguments
+///
+/// * `on` - `true` to enable RIT, `false` to disable.
+pub fn cmd_set_rit_on(on: bool) -> Vec<u8> {
+    if on {
+        encode_command("RT", "1")
+    } else {
+        encode_command("RT", "0")
+    }
+}
+
+/// Build a "read XIT state" command (`XT;`).
+///
+/// The response returns `XT0;` (XIT off) or `XT1;` (XIT on).
+pub fn cmd_read_xit() -> Vec<u8> {
+    encode_command("XT", "")
+}
+
+/// Build a "set XIT on/off" command.
+///
+/// - `XT1;` enables XIT.
+/// - `XT0;` disables XIT.
+///
+/// This does not change the offset value, only the on/off state.
+///
+/// # Arguments
+///
+/// * `on` - `true` to enable XIT, `false` to disable.
+pub fn cmd_set_xit_on(on: bool) -> Vec<u8> {
+    if on {
+        encode_command("XT", "1")
+    } else {
+        encode_command("XT", "0")
+    }
+}
+
+/// Build a "read RIT/XIT offset" command (`RO;`).
+///
+/// Reads the shared RIT/XIT offset register. Kenwood rigs use a single
+/// offset for both RIT and XIT. The response format is `RO+XXXXX;` or
+/// `RO-XXXXX;` where `XXXXX` is a 5-digit absolute offset in hertz.
+pub fn cmd_read_rit_xit_offset() -> Vec<u8> {
+    encode_command("RO", "")
+}
+
+/// Build a "RIT/XIT offset up" command (`RU;`).
+///
+/// Increments the shared RIT/XIT offset register by the rig's configured
+/// step size (typically 10 Hz on TS-590, 1 Hz on TS-890). Kenwood `RU`
+/// takes no parameter -- each call steps by one unit.
+pub fn cmd_rit_up() -> Vec<u8> {
+    encode_command("RU", "")
+}
+
+/// Build a "RIT/XIT offset down" command (`RD;`).
+///
+/// Decrements the shared RIT/XIT offset register by the rig's configured
+/// step size (typically 10 Hz on TS-590, 1 Hz on TS-890). Kenwood `RD`
+/// takes no parameter -- each call steps by one unit.
+pub fn cmd_rit_down() -> Vec<u8> {
+    encode_command("RD", "")
+}
+
+/// Build a "RIT/XIT clear" command (`RC;`).
+///
+/// Resets the shared RIT/XIT offset register to zero. To set an absolute
+/// offset, send `RC;` followed by repeated `RU;` or `RD;` commands.
+///
+/// **Quirk:** Kenwood RIT/XIT share a single offset. There is no command
+/// to set an absolute offset directly; use `RC;` then N x `RU;`/`RD;`.
+pub fn cmd_rit_clear() -> Vec<u8> {
+    encode_command("RC", "")
+}
+
+// ---------------------------------------------------------------
+// CW message command builders (KY command)
+// ---------------------------------------------------------------
+
+/// Build a "send CW message" command (`KY {text};`).
+///
+/// The text field is exactly 24 characters, right-padded with spaces if
+/// shorter than 24 characters. If the input is longer than 24 characters,
+/// it is truncated to 24.
+///
+/// The command format is `KY` followed by a single space separator and
+/// the 24-character text field, terminated with `;`.
+///
+/// **TS-590 quirk:** requires exactly 24 characters (space-padded).
+/// TS-890/TS-990 are more lenient but padding works universally.
+///
+/// # Arguments
+///
+/// * `text` - The CW message text to send (will be padded or truncated to 24 chars).
+pub fn cmd_send_cw_message(text: &str) -> Vec<u8> {
+    let truncated: String = text.chars().take(24).collect();
+    let padded = format!("{truncated:<24}");
+    encode_command("KY", &format!(" {padded}"))
+}
+
+/// Build a "read CW buffer status" command (`KY;`).
+///
+/// Queries whether the CW message buffer can accept more text.
+/// Response is `KY0;` (buffer ready) or `KY1;` (buffer full).
+pub fn cmd_read_cw_buffer() -> Vec<u8> {
+    encode_command("KY", "")
+}
+
+/// Build a "stop CW message" command.
+///
+/// Sends `KY` with 25 spaces in the parameter field (1 separator space +
+/// 24 space payload) to flush/clear the CW message buffer and abort any
+/// message in progress.
+pub fn cmd_stop_cw_message() -> Vec<u8> {
+    encode_command("KY", &" ".repeat(25))
 }
 
 // ---------------------------------------------------------------
@@ -358,6 +627,153 @@ pub fn parse_power_response(data: &str) -> Result<u16> {
     Ok(val)
 }
 
+/// Parse a CW speed response from the data portion of a `KS` response.
+///
+/// Expects a 3-character numeric string (000-060) representing speed in WPM.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data cannot be parsed.
+pub fn parse_cw_speed_response(data: &str) -> Result<u8> {
+    if data.len() != 3 {
+        return Err(Error::Protocol(format!(
+            "expected 3 digits for CW speed, got {} characters: {data:?}",
+            data.len()
+        )));
+    }
+    let val: u8 = data
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid CW speed digits: {data:?} ({e})")))?;
+    Ok(val)
+}
+
+/// Parse an antenna response from the data portion of an `AN` response.
+///
+/// Expects a single digit (1-2) representing the antenna port number.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data cannot be parsed.
+pub fn parse_antenna_response(data: &str) -> Result<u8> {
+    if data.len() != 1 {
+        return Err(Error::Protocol(format!(
+            "expected 1 digit for antenna, got {} characters: {data:?}",
+            data.len()
+        )));
+    }
+    let val: u8 = data
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid antenna digit: {data:?} ({e})")))?;
+    Ok(val)
+}
+
+/// Parse an AGC mode response from the data portion of a `GC` response (TS-890S).
+///
+/// Expects a single character (digit `0`-`3`) representing the AGC mode:
+/// 0=Off, 1=Slow, 2=Medium, 3=Fast.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data cannot be parsed.
+pub fn parse_agc_mode_response(data: &str) -> Result<u8> {
+    if data.len() != 1 {
+        return Err(Error::Protocol(format!(
+            "expected 1 digit for AGC mode, got {} characters: {data:?}",
+            data.len()
+        )));
+    }
+    let val: u8 = data
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid AGC mode digit: {data:?} ({e})")))?;
+    Ok(val)
+}
+
+/// Parse an AGC mode response with VFO from the data portion of a `GC` response (TS-990S).
+///
+/// Expects 2 characters: VFO digit + mode digit. Returns `(vfo, mode)`.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data cannot be parsed.
+pub fn parse_agc_mode_vfo_response(data: &str) -> Result<(u8, u8)> {
+    if data.len() != 2 {
+        return Err(Error::Protocol(format!(
+            "expected 2 digits for AGC mode with VFO, got {} characters: {data:?}",
+            data.len()
+        )));
+    }
+    let vfo: u8 = data[0..1]
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid AGC VFO digit: {:?} ({e})", &data[0..1])))?;
+    let mode: u8 = data[1..2]
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid AGC mode digit: {:?} ({e})", &data[1..2])))?;
+    Ok((vfo, mode))
+}
+
+/// Parse an AGC time constant response from the data portion of a `GT` response (TS-590S/SG).
+///
+/// Expects a 3-character numeric string representing the time constant value.
+/// Values: 000=Off, 005=Fast, 010=Medium, 020=Slow.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data cannot be parsed.
+pub fn parse_agc_time_constant_response(data: &str) -> Result<u8> {
+    if data.len() != 3 {
+        return Err(Error::Protocol(format!(
+            "expected 3 digits for AGC time constant, got {} characters: {data:?}",
+            data.len()
+        )));
+    }
+    let val: u8 = data
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid AGC time constant: {data:?} ({e})")))?;
+    Ok(val)
+}
+
+/// Parse a preamp response from the data portion of a `PA` response.
+///
+/// Expects a single character (digit `0`-`2`) representing the preamp level:
+/// 0=Off, 1=Preamp1, 2=Preamp2.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data cannot be parsed.
+pub fn parse_preamp_response(data: &str) -> Result<u8> {
+    if data.len() != 1 {
+        return Err(Error::Protocol(format!(
+            "expected 1 digit for preamp response, got {} characters: {data:?}",
+            data.len()
+        )));
+    }
+    let val: u8 = data
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid preamp level: {data:?} ({e})")))?;
+    Ok(val)
+}
+
+/// Parse an attenuator response from the data portion of an `RA` response.
+///
+/// Expects 2 characters representing the attenuator level.
+/// Values: 00=Off, 06=6dB, 12=12dB, 18=18dB.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data cannot be parsed.
+pub fn parse_attenuator_response(data: &str) -> Result<u8> {
+    if data.len() != 2 {
+        return Err(Error::Protocol(format!(
+            "expected 2 characters for attenuator response, got {} characters: {data:?}",
+            data.len()
+        )));
+    }
+    let val: u8 = data
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid attenuator level: {data:?} ({e})")))?;
+    Ok(val)
+}
+
 /// Parse a VFO select response from the data portion of an `FR` or `FT` response.
 ///
 /// - `"0"` = VFO A
@@ -378,6 +794,115 @@ pub fn parse_vfo_response(data: &str) -> Result<bool> {
         "0" => Ok(false), // VFO A
         "1" => Ok(true),  // VFO B
         _ => Err(Error::Protocol(format!("unexpected VFO state: {data:?}"))),
+    }
+}
+
+/// Parse a RIT response from the data portion of an `RT` response.
+///
+/// Expects a single character: `"0"` (RIT off) or `"1"` (RIT on).
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if `data` is empty or not a valid state.
+pub fn parse_rit_response(data: &str) -> Result<bool> {
+    if data.is_empty() {
+        return Err(Error::Protocol(
+            "expected RIT state digit, got empty data".into(),
+        ));
+    }
+    match data {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(Error::Protocol(format!("unexpected RIT state: {data:?}"))),
+    }
+}
+
+/// Parse a XIT response from the data portion of an `XT` response.
+///
+/// Expects a single character: `"0"` (XIT off) or `"1"` (XIT on).
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if `data` is empty or not a valid state.
+pub fn parse_xit_response(data: &str) -> Result<bool> {
+    if data.is_empty() {
+        return Err(Error::Protocol(
+            "expected XIT state digit, got empty data".into(),
+        ));
+    }
+    match data {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(Error::Protocol(format!("unexpected XIT state: {data:?}"))),
+    }
+}
+
+/// Parse a RIT/XIT offset response from the data portion of an `RO` response.
+///
+/// Kenwood returns the shared RIT/XIT offset as `+XXXXX` or `-XXXXX` where
+/// `XXXXX` is a 5-digit absolute offset in hertz.
+///
+/// After prefix splitting by the protocol decoder, the data portion has the
+/// format `+XXXXX` or `-XXXXX` (6 characters total).
+///
+/// # Returns
+///
+/// The signed offset in hertz.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data does not match the expected format.
+pub fn parse_rit_xit_offset_response(data: &str) -> Result<i32> {
+    if data.len() != 6 {
+        return Err(Error::Protocol(format!(
+            "expected 6 characters for RIT/XIT offset response, got {} characters: {data:?}",
+            data.len()
+        )));
+    }
+
+    let sign = match &data[0..1] {
+        "+" => 1i32,
+        "-" => -1i32,
+        other => {
+            return Err(Error::Protocol(format!(
+                "expected + or - for RIT/XIT offset sign, got {other:?}"
+            )));
+        }
+    };
+
+    let digits = &data[1..6];
+    let abs_offset: i32 = digits.parse().map_err(|e| {
+        Error::Protocol(format!(
+            "invalid RIT/XIT offset digits: {digits:?} ({e})"
+        ))
+    })?;
+
+    Ok(sign * abs_offset)
+}
+
+/// Parse a CW buffer status response from the data portion of a `KY` response.
+///
+/// The rig responds with `KY0;` when the buffer is ready to accept more text,
+/// or `KY1;` when the buffer is full.
+///
+/// # Returns
+///
+/// `true` if the buffer can accept more text (data is `"0"`), `false` if the
+/// buffer is full (data is `"1"`).
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if `data` is empty or not a valid buffer state.
+pub fn parse_cw_buffer_response(data: &str) -> Result<bool> {
+    match data {
+        "0" => Ok(true),
+        "1" => Ok(false),
+        "" => Err(Error::Protocol(
+            "expected CW buffer state digit, got empty data".into(),
+        )),
+        _ => Err(Error::Protocol(format!(
+            "unexpected CW buffer state: {data:?}"
+        ))),
     }
 }
 
@@ -664,6 +1189,41 @@ mod tests {
     }
 
     #[test]
+    fn cmd_read_cw_speed_bytes() {
+        assert_eq!(cmd_read_cw_speed(), b"KS;");
+    }
+
+    #[test]
+    fn cmd_set_cw_speed_25wpm() {
+        assert_eq!(cmd_set_cw_speed(25), b"KS025;");
+    }
+
+    #[test]
+    fn cmd_set_cw_speed_zero() {
+        assert_eq!(cmd_set_cw_speed(0), b"KS000;");
+    }
+
+    #[test]
+    fn cmd_vfo_a_eq_b_bytes() {
+        assert_eq!(cmd_vfo_a_eq_b(), b"AB;");
+    }
+
+    #[test]
+    fn cmd_read_antenna_bytes() {
+        assert_eq!(cmd_read_antenna(), b"AN;");
+    }
+
+    #[test]
+    fn cmd_set_antenna_1() {
+        assert_eq!(cmd_set_antenna(1), b"AN1;");
+    }
+
+    #[test]
+    fn cmd_set_antenna_2() {
+        assert_eq!(cmd_set_antenna(2), b"AN2;");
+    }
+
+    #[test]
     fn cmd_read_passband_bytes() {
         assert_eq!(cmd_read_passband(), b"SH;");
     }
@@ -671,6 +1231,260 @@ mod tests {
     #[test]
     fn cmd_set_passband_bytes() {
         assert_eq!(cmd_set_passband(12), b"SH12;");
+    }
+
+    // ---------------------------------------------------------------
+    // AGC commands — GC (TS-890S / TS-990S)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_agc_mode_bytes() {
+        assert_eq!(cmd_read_agc_mode(), b"GC;");
+    }
+
+    #[test]
+    fn cmd_set_agc_mode_off() {
+        assert_eq!(cmd_set_agc_mode(0), b"GC0;");
+    }
+
+    #[test]
+    fn cmd_set_agc_mode_slow() {
+        assert_eq!(cmd_set_agc_mode(1), b"GC1;");
+    }
+
+    #[test]
+    fn cmd_set_agc_mode_medium() {
+        assert_eq!(cmd_set_agc_mode(2), b"GC2;");
+    }
+
+    #[test]
+    fn cmd_set_agc_mode_fast() {
+        assert_eq!(cmd_set_agc_mode(3), b"GC3;");
+    }
+
+    #[test]
+    fn cmd_read_agc_mode_vfo_main() {
+        assert_eq!(cmd_read_agc_mode_vfo(0), b"GC0;");
+    }
+
+    #[test]
+    fn cmd_read_agc_mode_vfo_sub() {
+        assert_eq!(cmd_read_agc_mode_vfo(1), b"GC1;");
+    }
+
+    #[test]
+    fn cmd_set_agc_mode_vfo_main_fast() {
+        assert_eq!(cmd_set_agc_mode_vfo(0, 3), b"GC03;");
+    }
+
+    #[test]
+    fn cmd_set_agc_mode_vfo_sub_slow() {
+        assert_eq!(cmd_set_agc_mode_vfo(1, 1), b"GC11;");
+    }
+
+    // ---------------------------------------------------------------
+    // AGC commands — GT (TS-590S/SG)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_agc_time_constant_bytes() {
+        assert_eq!(cmd_read_agc_time_constant(), b"GT;");
+    }
+
+    #[test]
+    fn cmd_set_agc_time_constant_off() {
+        assert_eq!(cmd_set_agc_time_constant(0), b"GT000;");
+    }
+
+    #[test]
+    fn cmd_set_agc_time_constant_fast() {
+        assert_eq!(cmd_set_agc_time_constant(5), b"GT005;");
+    }
+
+    #[test]
+    fn cmd_set_agc_time_constant_medium() {
+        assert_eq!(cmd_set_agc_time_constant(10), b"GT010;");
+    }
+
+    #[test]
+    fn cmd_set_agc_time_constant_slow() {
+        assert_eq!(cmd_set_agc_time_constant(20), b"GT020;");
+    }
+
+    // ---------------------------------------------------------------
+    // Response parsing — AGC
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_agc_mode_off() {
+        assert_eq!(parse_agc_mode_response("0").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_agc_mode_slow() {
+        assert_eq!(parse_agc_mode_response("1").unwrap(), 1);
+    }
+
+    #[test]
+    fn parse_agc_mode_medium() {
+        assert_eq!(parse_agc_mode_response("2").unwrap(), 2);
+    }
+
+    #[test]
+    fn parse_agc_mode_fast() {
+        assert_eq!(parse_agc_mode_response("3").unwrap(), 3);
+    }
+
+    #[test]
+    fn parse_agc_mode_wrong_length() {
+        assert!(parse_agc_mode_response("").is_err());
+        assert!(parse_agc_mode_response("01").is_err());
+    }
+
+    #[test]
+    fn parse_agc_mode_vfo_main_fast() {
+        let (vfo, mode) = parse_agc_mode_vfo_response("03").unwrap();
+        assert_eq!(vfo, 0);
+        assert_eq!(mode, 3);
+    }
+
+    #[test]
+    fn parse_agc_mode_vfo_sub_slow() {
+        let (vfo, mode) = parse_agc_mode_vfo_response("11").unwrap();
+        assert_eq!(vfo, 1);
+        assert_eq!(mode, 1);
+    }
+
+    #[test]
+    fn parse_agc_mode_vfo_wrong_length() {
+        assert!(parse_agc_mode_vfo_response("0").is_err());
+        assert!(parse_agc_mode_vfo_response("012").is_err());
+    }
+
+    #[test]
+    fn parse_agc_tc_off() {
+        assert_eq!(parse_agc_time_constant_response("000").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_agc_tc_fast() {
+        assert_eq!(parse_agc_time_constant_response("005").unwrap(), 5);
+    }
+
+    #[test]
+    fn parse_agc_tc_medium() {
+        assert_eq!(parse_agc_time_constant_response("010").unwrap(), 10);
+    }
+
+    #[test]
+    fn parse_agc_tc_slow() {
+        assert_eq!(parse_agc_time_constant_response("020").unwrap(), 20);
+    }
+
+    #[test]
+    fn parse_agc_tc_wrong_length() {
+        assert!(parse_agc_time_constant_response("00").is_err());
+        assert!(parse_agc_time_constant_response("0001").is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Preamp commands
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_preamp_bytes() {
+        assert_eq!(cmd_read_preamp(), b"PA;");
+    }
+
+    #[test]
+    fn cmd_set_preamp_off() {
+        assert_eq!(cmd_set_preamp(0), b"PA0;");
+    }
+
+    #[test]
+    fn cmd_set_preamp_1() {
+        assert_eq!(cmd_set_preamp(1), b"PA1;");
+    }
+
+    #[test]
+    fn cmd_set_preamp_2() {
+        assert_eq!(cmd_set_preamp(2), b"PA2;");
+    }
+
+    #[test]
+    fn parse_preamp_off() {
+        assert_eq!(parse_preamp_response("0").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_preamp_1() {
+        assert_eq!(parse_preamp_response("1").unwrap(), 1);
+    }
+
+    #[test]
+    fn parse_preamp_2() {
+        assert_eq!(parse_preamp_response("2").unwrap(), 2);
+    }
+
+    #[test]
+    fn parse_preamp_wrong_length() {
+        assert!(parse_preamp_response("").is_err());
+        assert!(parse_preamp_response("01").is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Attenuator commands
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_attenuator_bytes() {
+        assert_eq!(cmd_read_attenuator(), b"RA;");
+    }
+
+    #[test]
+    fn cmd_set_attenuator_off() {
+        assert_eq!(cmd_set_attenuator(0), b"RA00;");
+    }
+
+    #[test]
+    fn cmd_set_attenuator_6db() {
+        assert_eq!(cmd_set_attenuator(6), b"RA06;");
+    }
+
+    #[test]
+    fn cmd_set_attenuator_12db() {
+        assert_eq!(cmd_set_attenuator(12), b"RA12;");
+    }
+
+    #[test]
+    fn cmd_set_attenuator_18db() {
+        assert_eq!(cmd_set_attenuator(18), b"RA18;");
+    }
+
+    #[test]
+    fn parse_attenuator_off() {
+        assert_eq!(parse_attenuator_response("00").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_attenuator_6db() {
+        assert_eq!(parse_attenuator_response("06").unwrap(), 6);
+    }
+
+    #[test]
+    fn parse_attenuator_12db() {
+        assert_eq!(parse_attenuator_response("12").unwrap(), 12);
+    }
+
+    #[test]
+    fn parse_attenuator_18db() {
+        assert_eq!(parse_attenuator_response("18").unwrap(), 18);
+    }
+
+    #[test]
+    fn parse_attenuator_wrong_length() {
+        assert!(parse_attenuator_response("0").is_err());
+        assert!(parse_attenuator_response("001").is_err());
     }
 
     // ---------------------------------------------------------------
@@ -922,6 +1736,49 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // Response parsing -- CW speed
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_cw_speed_25() {
+        assert_eq!(parse_cw_speed_response("025").unwrap(), 25);
+    }
+
+    #[test]
+    fn parse_cw_speed_zero() {
+        assert_eq!(parse_cw_speed_response("000").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_cw_speed_max() {
+        assert_eq!(parse_cw_speed_response("060").unwrap(), 60);
+    }
+
+    #[test]
+    fn parse_cw_speed_wrong_length() {
+        assert!(parse_cw_speed_response("25").is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Response parsing -- antenna
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_antenna_1() {
+        assert_eq!(parse_antenna_response("1").unwrap(), 1);
+    }
+
+    #[test]
+    fn parse_antenna_2() {
+        assert_eq!(parse_antenna_response("2").unwrap(), 2);
+    }
+
+    #[test]
+    fn parse_antenna_wrong_length() {
+        assert!(parse_antenna_response("12").is_err());
+    }
+
+    // ---------------------------------------------------------------
     // Response parsing -- VFO select
     // ---------------------------------------------------------------
 
@@ -1011,5 +1868,291 @@ mod tests {
     fn cmd_set_power_max_3_digits() {
         let cmd = cmd_set_power(999);
         assert_eq!(cmd, b"PC999;");
+    }
+
+    // ---------------------------------------------------------------
+    // RIT / XIT command builders
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_rit_bytes() {
+        assert_eq!(cmd_read_rit(), b"RT;");
+    }
+
+    #[test]
+    fn cmd_set_rit_on_bytes() {
+        assert_eq!(cmd_set_rit_on(true), b"RT1;");
+    }
+
+    #[test]
+    fn cmd_set_rit_off_bytes() {
+        assert_eq!(cmd_set_rit_on(false), b"RT0;");
+    }
+
+    #[test]
+    fn cmd_read_xit_bytes() {
+        assert_eq!(cmd_read_xit(), b"XT;");
+    }
+
+    #[test]
+    fn cmd_set_xit_on_bytes() {
+        assert_eq!(cmd_set_xit_on(true), b"XT1;");
+    }
+
+    #[test]
+    fn cmd_set_xit_off_bytes() {
+        assert_eq!(cmd_set_xit_on(false), b"XT0;");
+    }
+
+    #[test]
+    fn cmd_read_rit_xit_offset_bytes() {
+        assert_eq!(cmd_read_rit_xit_offset(), b"RO;");
+    }
+
+    #[test]
+    fn cmd_rit_up_bytes() {
+        assert_eq!(cmd_rit_up(), b"RU;");
+    }
+
+    #[test]
+    fn cmd_rit_down_bytes() {
+        assert_eq!(cmd_rit_down(), b"RD;");
+    }
+
+    #[test]
+    fn cmd_rit_clear_bytes() {
+        assert_eq!(cmd_rit_clear(), b"RC;");
+    }
+
+    // ---------------------------------------------------------------
+    // Response parsing — RIT on/off
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_rit_off() {
+        assert!(!parse_rit_response("0").unwrap());
+    }
+
+    #[test]
+    fn parse_rit_on() {
+        assert!(parse_rit_response("1").unwrap());
+    }
+
+    #[test]
+    fn parse_rit_empty() {
+        assert!(parse_rit_response("").is_err());
+    }
+
+    #[test]
+    fn parse_rit_invalid() {
+        assert!(parse_rit_response("2").is_err());
+    }
+
+    #[test]
+    fn parse_rit_multi_char() {
+        assert!(parse_rit_response("01").is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Response parsing — XIT on/off
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_xit_off() {
+        assert!(!parse_xit_response("0").unwrap());
+    }
+
+    #[test]
+    fn parse_xit_on() {
+        assert!(parse_xit_response("1").unwrap());
+    }
+
+    #[test]
+    fn parse_xit_empty() {
+        assert!(parse_xit_response("").is_err());
+    }
+
+    #[test]
+    fn parse_xit_invalid() {
+        assert!(parse_xit_response("2").is_err());
+    }
+
+    #[test]
+    fn parse_xit_multi_char() {
+        assert!(parse_xit_response("01").is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Response parsing — RIT/XIT offset
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_offset_positive_50hz() {
+        assert_eq!(parse_rit_xit_offset_response("+00050").unwrap(), 50);
+    }
+
+    #[test]
+    fn parse_offset_negative_50hz() {
+        assert_eq!(parse_rit_xit_offset_response("-00050").unwrap(), -50);
+    }
+
+    #[test]
+    fn parse_offset_positive_zero() {
+        assert_eq!(parse_rit_xit_offset_response("+00000").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_offset_negative_zero() {
+        // -00000 should parse as 0 (not -0)
+        assert_eq!(parse_rit_xit_offset_response("-00000").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_offset_max_positive() {
+        assert_eq!(parse_rit_xit_offset_response("+99999").unwrap(), 99999);
+    }
+
+    #[test]
+    fn parse_offset_max_negative() {
+        assert_eq!(parse_rit_xit_offset_response("-99999").unwrap(), -99999);
+    }
+
+    #[test]
+    fn parse_offset_typical_rit_120hz() {
+        assert_eq!(parse_rit_xit_offset_response("+00120").unwrap(), 120);
+    }
+
+    #[test]
+    fn parse_offset_typical_rit_negative_300hz() {
+        assert_eq!(parse_rit_xit_offset_response("-00300").unwrap(), -300);
+    }
+
+    #[test]
+    fn parse_offset_1hz() {
+        assert_eq!(parse_rit_xit_offset_response("+00001").unwrap(), 1);
+    }
+
+    #[test]
+    fn parse_offset_negative_1hz() {
+        assert_eq!(parse_rit_xit_offset_response("-00001").unwrap(), -1);
+    }
+
+    #[test]
+    fn parse_offset_wrong_length_short() {
+        assert!(parse_rit_xit_offset_response("+0050").is_err());
+    }
+
+    #[test]
+    fn parse_offset_wrong_length_long() {
+        assert!(parse_rit_xit_offset_response("+000500").is_err());
+    }
+
+    #[test]
+    fn parse_offset_empty() {
+        assert!(parse_rit_xit_offset_response("").is_err());
+    }
+
+    #[test]
+    fn parse_offset_invalid_sign() {
+        assert!(parse_rit_xit_offset_response("*00050").is_err());
+    }
+
+    #[test]
+    fn parse_offset_missing_sign() {
+        assert!(parse_rit_xit_offset_response("000050").is_err());
+    }
+
+    #[test]
+    fn parse_offset_invalid_digits() {
+        assert!(parse_rit_xit_offset_response("+00AB0").is_err());
+    }
+
+    #[test]
+    fn parse_offset_non_numeric() {
+        assert!(parse_rit_xit_offset_response("+hello").is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // CW message command builders (KY command)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_send_cw_message_bytes() {
+        // "CQ CQ DE W1AW" is 13 chars, should be right-padded to 24 (11 trailing spaces)
+        let cmd = cmd_send_cw_message("CQ CQ DE W1AW");
+        // Build expected: "KY " + "CQ CQ DE W1AW" (13) + 11 spaces + ";"
+        let mut expected = b"KY CQ CQ DE W1AW".to_vec();
+        expected.extend_from_slice(&[b' '; 11]);
+        expected.push(b';');
+        assert_eq!(cmd, expected);
+    }
+
+    #[test]
+    fn cmd_send_cw_message_empty() {
+        // Empty string produces KY + space + 24 spaces + ;
+        let cmd = cmd_send_cw_message("");
+        let mut expected = b"KY ".to_vec();
+        expected.extend_from_slice(&[b' '; 24]);
+        expected.push(b';');
+        assert_eq!(cmd, expected);
+    }
+
+    #[test]
+    fn cmd_send_cw_message_truncates_at_24() {
+        // 30-char input should be truncated to 24
+        let input = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123";
+        assert_eq!(input.len(), 30);
+        let cmd = cmd_send_cw_message(input);
+        assert_eq!(cmd, b"KY ABCDEFGHIJKLMNOPQRSTUVWX;");
+    }
+
+    #[test]
+    fn cmd_send_cw_message_exact_24() {
+        // Exactly 24 chars needs no padding
+        let input = "ABCDEFGHIJKLMNOPQRSTUVWX";
+        assert_eq!(input.len(), 24);
+        let cmd = cmd_send_cw_message(input);
+        assert_eq!(cmd, b"KY ABCDEFGHIJKLMNOPQRSTUVWX;");
+    }
+
+    #[test]
+    fn cmd_read_cw_buffer_bytes() {
+        assert_eq!(cmd_read_cw_buffer(), b"KY;");
+    }
+
+    #[test]
+    fn cmd_stop_cw_message_bytes() {
+        // KY + 25 spaces + ;
+        let cmd = cmd_stop_cw_message();
+        let mut expected = b"KY".to_vec();
+        expected.extend_from_slice(&[b' '; 25]);
+        expected.push(b';');
+        assert_eq!(cmd, expected);
+    }
+
+    // ---------------------------------------------------------------
+    // Response parsing — CW buffer status
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_cw_buffer_ready() {
+        // "0" means buffer can accept more text
+        assert!(parse_cw_buffer_response("0").unwrap());
+    }
+
+    #[test]
+    fn parse_cw_buffer_full() {
+        // "1" means buffer is full
+        assert!(!parse_cw_buffer_response("1").unwrap());
+    }
+
+    #[test]
+    fn parse_cw_buffer_invalid() {
+        assert!(parse_cw_buffer_response("2").is_err());
+    }
+
+    #[test]
+    fn parse_cw_buffer_empty() {
+        assert!(parse_cw_buffer_response("").is_err());
     }
 }

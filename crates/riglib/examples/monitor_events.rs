@@ -118,6 +118,32 @@ async fn main() -> anyhow::Result<()> {
                     RigEvent::Reconnecting { attempt } => {
                         println!("{} Reconnecting      attempt {}", timestamp, attempt);
                     }
+                    RigEvent::AgcChanged { receiver, mode } => {
+                        println!("{} AgcChanged        {} -> {}", timestamp, receiver, mode);
+                    }
+                    RigEvent::CwSpeedChanged { wpm } => {
+                        println!("{} CwSpeedChanged    {} WPM", timestamp, wpm);
+                    }
+                    RigEvent::RitChanged { enabled, offset_hz } => {
+                        let state = if enabled { "ON" } else { "OFF" };
+                        println!(
+                            "{} RitChanged        {} offset {} Hz",
+                            timestamp, state, offset_hz
+                        );
+                    }
+                    RigEvent::XitChanged { enabled, offset_hz } => {
+                        let state = if enabled { "ON" } else { "OFF" };
+                        println!(
+                            "{} XitChanged        {} offset {} Hz",
+                            timestamp, state, offset_hz
+                        );
+                    }
+                    RigEvent::PreampChanged { receiver, level } => {
+                        println!("{} PreampChanged     {} -> {}", timestamp, receiver, level);
+                    }
+                    RigEvent::AttenuatorChanged { receiver, level } => {
+                        println!("{} AttenuatorChanged {} -> {}", timestamp, receiver, level);
+                    }
                 }
             }
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {

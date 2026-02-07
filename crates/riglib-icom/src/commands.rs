@@ -64,19 +64,50 @@ const SUB_SELECT_SUB: u8 = 0xD1;
 const SUB_SPLIT_OFF: u8 = 0x00;
 const SUB_SPLIT_ON: u8 = 0x01;
 
+/// Function control (cmd 0x16) — various on/off functions including AGC mode.
+const CMD_FUNC: u8 = 0x16;
+
 // Sub-command constants for CMD_LEVEL (0x14)
 const SUB_RF_POWER: u8 = 0x0A;
+const SUB_CW_SPEED: u8 = 0x0C;
+
+// Sub-command constants for CMD_VFO_SELECT (0x07) — operations
+const SUB_VFO_A_EQ_B: u8 = 0xA0;
+const SUB_VFO_SWAP: u8 = 0xB0;
+
+/// Attenuator command (cmd 0x11).
+const CMD_ATTENUATOR: u8 = 0x11;
+
+/// Antenna connector command (cmd 0x12).
+const CMD_ANTENNA: u8 = 0x12;
 
 // Sub-command constants for CMD_METER (0x15)
 const SUB_S_METER: u8 = 0x02;
 const SUB_SWR_METER: u8 = 0x12;
 const SUB_ALC_METER: u8 = 0x13;
 
+// Sub-command constants for CMD_FUNC (0x16)
+const SUB_PREAMP: u8 = 0x02;
+const SUB_AGC_MODE: u8 = 0x12;
+
 // Sub-command constants for CMD_MISC (0x1A)
 const SUB_IF_FILTER: u8 = 0x03;
+const SUB_AGC_TIME_CONSTANT: u8 = 0x04;
 
 // Sub-command for CMD_PTT (0x1C)
 const SUB_PTT: u8 = 0x00;
+
+/// RIT/XIT control (cmd 0x21).
+const CMD_RIT_XIT: u8 = 0x21;
+
+/// Send CW message (cmd 0x17).
+const CMD_SEND_CW_MESSAGE: u8 = 0x17;
+
+// Sub-command constants for CMD_RIT_XIT (0x21)
+const SUB_RIT_ON_OFF: u8 = 0x01;
+const SUB_RIT_OFFSET: u8 = 0x02;
+const SUB_XIT_ON_OFF: u8 = 0x03;
+const SUB_XIT_OFFSET: u8 = 0x04;
 
 // ---------------------------------------------------------------
 // CI-V mode byte mapping
@@ -293,6 +324,520 @@ pub fn cmd_read_if_filter(addr: u8) -> Vec<u8> {
     encode_frame(addr, CONTROLLER_ADDR, CMD_MISC, Some(SUB_IF_FILTER), &[])
 }
 
+/// Build a CI-V "read CW keyer speed" command.
+///
+/// Sends command 0x14 sub-command 0x0C with no data. The rig responds with
+/// a 2-byte BCD value (0000-0255) representing the keyer speed level.
+pub fn cmd_read_cw_speed(addr: u8) -> Vec<u8> {
+    encode_frame(addr, CONTROLLER_ADDR, CMD_LEVEL, Some(SUB_CW_SPEED), &[])
+}
+
+/// Build a CI-V "set CW keyer speed" command.
+///
+/// Sends command 0x14 sub-command 0x0C with a 2-byte BCD value.
+/// The level maps linearly: 0 = minimum speed (6 WPM), 255 = maximum
+/// speed (48 WPM) on most modern Icom rigs.
+///
+/// # Arguments
+///
+/// * `addr` - CI-V address of the target rig
+/// * `level_0_255` - Speed level from 0 to 255
+pub fn cmd_set_cw_speed(addr: u8, level_0_255: u16) -> Vec<u8> {
+    let hi = ((level_0_255 / 100) & 0x0F) as u8;
+    let mid = (((level_0_255 % 100) / 10) & 0x0F) as u8;
+    let lo = ((level_0_255 % 10) & 0x0F) as u8;
+    let byte_hi = hi;
+    let byte_lo = (mid << 4) | lo;
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_LEVEL,
+        Some(SUB_CW_SPEED),
+        &[byte_hi, byte_lo],
+    )
+}
+
+/// Build a CI-V "VFO A=B" command (copy active VFO to inactive).
+///
+/// Sends command 0x07 sub-command 0xA0.
+pub fn cmd_vfo_a_eq_b(addr: u8) -> Vec<u8> {
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_VFO_SELECT,
+        Some(SUB_VFO_A_EQ_B),
+        &[],
+    )
+}
+
+/// Build a CI-V "VFO swap" command (exchange A and B frequencies).
+///
+/// Sends command 0x07 sub-command 0xB0.
+pub fn cmd_vfo_swap(addr: u8) -> Vec<u8> {
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_VFO_SELECT,
+        Some(SUB_VFO_SWAP),
+        &[],
+    )
+}
+
+/// Build a CI-V "read antenna" command.
+///
+/// Sends command 0x12 with no data. The rig responds with a single byte
+/// indicating the selected antenna connector (0x01 = ANT1, 0x02 = ANT2, etc.).
+pub fn cmd_read_antenna(addr: u8) -> Vec<u8> {
+    encode_frame(addr, CONTROLLER_ADDR, CMD_ANTENNA, None, &[])
+}
+
+/// Build a CI-V "set antenna" command.
+///
+/// Sends command 0x12 with a single data byte for the antenna connector.
+///
+/// # Arguments
+///
+/// * `addr` - CI-V address of the target rig
+/// * `ant` - Antenna number (0x01 = ANT1, 0x02 = ANT2)
+pub fn cmd_set_antenna(addr: u8, ant: u8) -> Vec<u8> {
+    encode_frame(addr, CONTROLLER_ADDR, CMD_ANTENNA, None, &[ant])
+}
+
+/// Build a CI-V "read AGC mode" command.
+///
+/// Sends command 0x16 sub-command 0x12 with no data. The rig responds with
+/// a single byte: 0x01 = fast, 0x02 = mid, 0x03 = slow.
+///
+/// Note: On SDR-generation rigs (IC-7300, IC-7610, IC-9700, IC-705, etc.),
+/// AGC off is not reported via this command — see [`cmd_read_agc_time_constant`].
+pub fn cmd_read_agc_mode(addr: u8) -> Vec<u8> {
+    encode_frame(addr, CONTROLLER_ADDR, CMD_FUNC, Some(SUB_AGC_MODE), &[])
+}
+
+/// Build a CI-V "set AGC mode" command.
+///
+/// Sends command 0x16 sub-command 0x12 with a single data byte.
+///
+/// # Arguments
+///
+/// * `addr` - CI-V address of the target rig
+/// * `mode` - AGC mode byte: 0x01 = fast, 0x02 = mid, 0x03 = slow.
+///   On older rigs (IC-785x, IC-7800, IC-7700, IC-7600) 0x00 = off.
+///   On SDR-generation rigs 0x00 is not supported via this command.
+pub fn cmd_set_agc_mode(addr: u8, mode: u8) -> Vec<u8> {
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_FUNC,
+        Some(SUB_AGC_MODE),
+        &[mode],
+    )
+}
+
+/// Build a CI-V "read AGC time constant" command.
+///
+/// Sends command 0x1A sub-command 0x04 with no data. On SDR-generation
+/// Icom rigs, a value of 0x00 means AGC is off.
+///
+/// This is the only way to read AGC-off state on IC-7300, IC-7610,
+/// IC-9700, IC-705, IC-7300MK2, and IC-905.
+pub fn cmd_read_agc_time_constant(addr: u8) -> Vec<u8> {
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_MISC,
+        Some(SUB_AGC_TIME_CONSTANT),
+        &[],
+    )
+}
+
+/// Build a CI-V "set AGC time constant" command.
+///
+/// Sends command 0x1A sub-command 0x04 with a single data byte.
+/// Setting value to 0x00 turns AGC off on SDR-generation Icom rigs.
+///
+/// # Arguments
+///
+/// * `addr` - CI-V address of the target rig
+/// * `value` - Time constant value (0x00 = AGC off on SDR rigs)
+pub fn cmd_set_agc_time_constant(addr: u8, value: u8) -> Vec<u8> {
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_MISC,
+        Some(SUB_AGC_TIME_CONSTANT),
+        &[value],
+    )
+}
+
+// ---------------------------------------------------------------
+// RIT/XIT command builders
+// ---------------------------------------------------------------
+
+/// Build a CI-V "read RIT on/off" command.
+///
+/// Sends command 0x21 sub-command 0x01 with no data. The rig responds with
+/// a single byte: 0x00 = off, 0x01 = on.
+pub fn cmd_read_rit_on(addr: u8) -> Vec<u8> {
+    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_RIT_ON_OFF), &[])
+}
+
+/// Build a CI-V "set RIT on/off" command.
+///
+/// Sends command 0x21 sub-command 0x01 with data 0x01 (on) or 0x00 (off).
+///
+/// # Arguments
+///
+/// * `addr` - CI-V address of the target rig
+/// * `on` - `true` to enable RIT, `false` to disable
+pub fn cmd_set_rit_on(addr: u8, on: bool) -> Vec<u8> {
+    let data = if on { 0x01u8 } else { 0x00u8 };
+    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_RIT_ON_OFF), &[data])
+}
+
+/// Build a CI-V "read RIT offset" command.
+///
+/// Sends command 0x21 sub-command 0x02 with no data. The rig responds with
+/// a sign byte (0x00 = positive, 0x01 = negative) followed by 2 bytes of
+/// BCD-encoded magnitude (e.g., +150 Hz = `0x00 0x01 0x50`).
+pub fn cmd_read_rit_offset(addr: u8) -> Vec<u8> {
+    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_RIT_OFFSET), &[])
+}
+
+/// Build a CI-V "set RIT offset" command.
+///
+/// Sends command 0x21 sub-command 0x02 with a sign byte and 2-byte BCD
+/// magnitude. The offset range is typically +/-9999 Hz.
+///
+/// # Arguments
+///
+/// * `addr` - CI-V address of the target rig
+/// * `offset_hz` - RIT offset in hertz (positive or negative)
+pub fn cmd_set_rit_offset(addr: u8, offset_hz: i32) -> Vec<u8> {
+    let data = encode_rit_xit_offset(offset_hz);
+    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_RIT_OFFSET), &data)
+}
+
+/// Build a CI-V "read XIT on/off" command.
+///
+/// Sends command 0x21 sub-command 0x03 with no data. The rig responds with
+/// a single byte: 0x00 = off, 0x01 = on.
+pub fn cmd_read_xit_on(addr: u8) -> Vec<u8> {
+    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_XIT_ON_OFF), &[])
+}
+
+/// Build a CI-V "set XIT on/off" command.
+///
+/// Sends command 0x21 sub-command 0x03 with data 0x01 (on) or 0x00 (off).
+///
+/// # Arguments
+///
+/// * `addr` - CI-V address of the target rig
+/// * `on` - `true` to enable XIT, `false` to disable
+pub fn cmd_set_xit_on(addr: u8, on: bool) -> Vec<u8> {
+    let data = if on { 0x01u8 } else { 0x00u8 };
+    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_XIT_ON_OFF), &[data])
+}
+
+/// Build a CI-V "read XIT offset" command.
+///
+/// Sends command 0x21 sub-command 0x04 with no data. The rig responds with
+/// a sign byte (0x00 = positive, 0x01 = negative) followed by 2 bytes of
+/// BCD-encoded magnitude.
+pub fn cmd_read_xit_offset(addr: u8) -> Vec<u8> {
+    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_XIT_OFFSET), &[])
+}
+
+/// Build a CI-V "set XIT offset" command.
+///
+/// Sends command 0x21 sub-command 0x04 with a sign byte and 2-byte BCD
+/// magnitude. The offset range is typically +/-9999 Hz.
+///
+/// # Arguments
+///
+/// * `addr` - CI-V address of the target rig
+/// * `offset_hz` - XIT offset in hertz (positive or negative)
+pub fn cmd_set_xit_offset(addr: u8, offset_hz: i32) -> Vec<u8> {
+    let data = encode_rit_xit_offset(offset_hz);
+    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_XIT_OFFSET), &data)
+}
+
+// ---------------------------------------------------------------
+// CW message command builders
+// ---------------------------------------------------------------
+
+/// Build a CI-V "send CW message" command.
+///
+/// Sends command 0x17 with the text payload as raw ASCII bytes. Each
+/// character is sent as its standard ASCII byte value (e.g., `'C'` = 0x43,
+/// `'Q'` = 0x51). The payload is truncated to 30 characters if longer;
+/// the rig wiring layer handles chunking for longer messages.
+///
+/// # Arguments
+///
+/// * `addr` - CI-V address of the target rig (e.g. `0x98` for IC-7610)
+/// * `text` - ASCII text to send as CW (max 30 characters per frame)
+pub fn cmd_send_cw_message(addr: u8, text: &str) -> Vec<u8> {
+    let text_bytes: Vec<u8> = text.as_bytes().iter().copied().take(30).collect();
+    encode_frame(addr, CONTROLLER_ADDR, CMD_SEND_CW_MESSAGE, None, &text_bytes)
+}
+
+/// Build a CI-V "stop CW message" command.
+///
+/// Sends command 0x17 with a single `0xFF` byte to abort a CW message
+/// that is currently being sent by the rig's keyer.
+///
+/// # Arguments
+///
+/// * `addr` - CI-V address of the target rig
+pub fn cmd_stop_cw_message(addr: u8) -> Vec<u8> {
+    encode_frame(addr, CONTROLLER_ADDR, CMD_SEND_CW_MESSAGE, None, &[0xFF])
+}
+
+// ---------------------------------------------------------------
+// RIT/XIT response parsers
+// ---------------------------------------------------------------
+
+/// Parse a RIT on/off response from CI-V data bytes.
+///
+/// Expects 1 byte: 0x00 = off, 0x01 = on.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data is empty.
+pub fn parse_rit_on_response(data: &[u8]) -> Result<bool> {
+    if data.is_empty() {
+        return Err(Error::Protocol(
+            "expected 1 byte for RIT on/off response, got 0".into(),
+        ));
+    }
+    Ok(data[0] != 0x00)
+}
+
+/// Parse a RIT offset response from CI-V data bytes.
+///
+/// Expects 3 bytes: a sign byte (0x00 = positive, 0x01 = negative) followed
+/// by 2 bytes of BCD-encoded magnitude.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data length is wrong or contains
+/// invalid BCD digits.
+pub fn parse_rit_offset_response(data: &[u8]) -> Result<i32> {
+    parse_rit_xit_offset_response(data, "RIT")
+}
+
+/// Parse a XIT on/off response from CI-V data bytes.
+///
+/// Expects 1 byte: 0x00 = off, 0x01 = on.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data is empty.
+pub fn parse_xit_on_response(data: &[u8]) -> Result<bool> {
+    if data.is_empty() {
+        return Err(Error::Protocol(
+            "expected 1 byte for XIT on/off response, got 0".into(),
+        ));
+    }
+    Ok(data[0] != 0x00)
+}
+
+/// Parse a XIT offset response from CI-V data bytes.
+///
+/// Expects 3 bytes: a sign byte (0x00 = positive, 0x01 = negative) followed
+/// by 2 bytes of BCD-encoded magnitude.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data length is wrong or contains
+/// invalid BCD digits.
+pub fn parse_xit_offset_response(data: &[u8]) -> Result<i32> {
+    parse_rit_xit_offset_response(data, "XIT")
+}
+
+// ---------------------------------------------------------------
+// RIT/XIT offset encoding/decoding helpers
+// ---------------------------------------------------------------
+
+/// Encode a signed RIT/XIT offset as a sign byte + 2-byte BCD magnitude.
+///
+/// The offset is clamped to +/-9999 Hz. The encoding is:
+/// - Byte 0: sign (0x00 = positive, 0x01 = negative)
+/// - Byte 1: high BCD byte (thousands and hundreds digits)
+/// - Byte 2: low BCD byte (tens and ones digits)
+///
+/// Example: +150 Hz = `[0x00, 0x01, 0x50]`, -300 Hz = `[0x01, 0x03, 0x00]`
+fn encode_rit_xit_offset(offset_hz: i32) -> [u8; 3] {
+    let sign_byte: u8 = if offset_hz < 0 { 0x01 } else { 0x00 };
+    let magnitude = offset_hz.unsigned_abs().min(9999);
+
+    let thousands = ((magnitude / 1000) % 10) as u8;
+    let hundreds = ((magnitude / 100) % 10) as u8;
+    let tens = ((magnitude / 10) % 10) as u8;
+    let ones = (magnitude % 10) as u8;
+
+    let bcd_hi = (thousands << 4) | hundreds;
+    let bcd_lo = (tens << 4) | ones;
+
+    [sign_byte, bcd_hi, bcd_lo]
+}
+
+/// Parse a signed RIT/XIT offset from CI-V response data.
+///
+/// Expects 3 bytes: sign byte + 2-byte BCD magnitude.
+fn parse_rit_xit_offset_response(data: &[u8], label: &str) -> Result<i32> {
+    if data.len() != 3 {
+        return Err(Error::Protocol(format!(
+            "expected 3 bytes for {label} offset response, got {}",
+            data.len()
+        )));
+    }
+
+    let sign_byte = data[0];
+    let bcd_bytes = &data[1..3];
+
+    validate_bcd(bcd_bytes)?;
+
+    let hi = bcd_bytes[0];
+    let lo = bcd_bytes[1];
+
+    let thousands = ((hi >> 4) & 0x0F) as i32;
+    let hundreds = (hi & 0x0F) as i32;
+    let tens = ((lo >> 4) & 0x0F) as i32;
+    let ones = (lo & 0x0F) as i32;
+
+    let magnitude = thousands * 1000 + hundreds * 100 + tens * 10 + ones;
+
+    if sign_byte == 0x01 {
+        Ok(-magnitude)
+    } else {
+        Ok(magnitude)
+    }
+}
+
+/// Parse an AGC mode response from CI-V data bytes.
+///
+/// Expects 1 byte: 0x01 = fast, 0x02 = mid, 0x03 = slow.
+/// On older rigs, 0x00 = off.
+///
+/// Returns the raw mode byte for the rig layer to interpret.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data is empty.
+pub fn parse_agc_mode_response(data: &[u8]) -> Result<u8> {
+    if data.is_empty() {
+        return Err(Error::Protocol(
+            "expected 1 byte for AGC mode response, got 0".into(),
+        ));
+    }
+    Ok(data[0])
+}
+
+/// Parse an AGC time constant response from CI-V data bytes.
+///
+/// Expects 1 byte representing the AGC time constant. A value of 0x00
+/// indicates AGC off on SDR-generation rigs.
+///
+/// Returns the raw time constant byte.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data is empty.
+pub fn parse_agc_time_constant_response(data: &[u8]) -> Result<u8> {
+    if data.is_empty() {
+        return Err(Error::Protocol(
+            "expected 1 byte for AGC time constant response, got 0".into(),
+        ));
+    }
+    Ok(data[0])
+}
+
+/// Build a CI-V "read preamp" command.
+///
+/// Sends command 0x16 sub-command 0x02 with no data. The rig responds with
+/// a single byte: 0x00 = off, 0x01 = preamp 1, 0x02 = preamp 2.
+pub fn cmd_read_preamp(addr: u8) -> Vec<u8> {
+    encode_frame(addr, CONTROLLER_ADDR, CMD_FUNC, Some(SUB_PREAMP), &[])
+}
+
+/// Build a CI-V "set preamp" command.
+///
+/// Sends command 0x16 sub-command 0x02 with a single data byte.
+///
+/// # Arguments
+///
+/// * `addr` - CI-V address of the target rig
+/// * `level` - Preamp level: 0x00 = off, 0x01 = preamp 1, 0x02 = preamp 2.
+///   Available levels are model-dependent (gated in the rig layer).
+pub fn cmd_set_preamp(addr: u8, level: u8) -> Vec<u8> {
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_FUNC,
+        Some(SUB_PREAMP),
+        &[level],
+    )
+}
+
+/// Parse a preamp response from CI-V data bytes.
+///
+/// Expects 1 byte: 0x00 = off, 0x01 = preamp 1, 0x02 = preamp 2.
+///
+/// Returns the raw preamp level byte for the rig layer to interpret.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data is empty.
+pub fn parse_preamp_response(data: &[u8]) -> Result<u8> {
+    if data.is_empty() {
+        return Err(Error::Protocol(
+            "expected 1 byte for preamp response, got 0".into(),
+        ));
+    }
+    Ok(data[0])
+}
+
+/// Build a CI-V "read attenuator" command.
+///
+/// Sends command 0x11 with no sub-command or data. The rig responds with a
+/// single byte indicating the attenuator setting (0x00 = off, 0x20 = 20 dB
+/// on most models).
+pub fn cmd_read_attenuator(addr: u8) -> Vec<u8> {
+    encode_frame(addr, CONTROLLER_ADDR, CMD_ATTENUATOR, None, &[])
+}
+
+/// Build a CI-V "set attenuator" command.
+///
+/// Sends command 0x11 with a single data byte.
+///
+/// # Arguments
+///
+/// * `addr` - CI-V address of the target rig
+/// * `level` - Attenuator level: 0x00 = off, 0x20 = 20 dB on most models.
+pub fn cmd_set_attenuator(addr: u8, level: u8) -> Vec<u8> {
+    encode_frame(addr, CONTROLLER_ADDR, CMD_ATTENUATOR, None, &[level])
+}
+
+/// Parse an attenuator response from CI-V data bytes.
+///
+/// Expects 1 byte: 0x00 = off, 0x20 = 20 dB on most models.
+///
+/// Returns the raw attenuator level byte.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data is empty.
+pub fn parse_attenuator_response(data: &[u8]) -> Result<u8> {
+    if data.is_empty() {
+        return Err(Error::Protocol(
+            "expected 1 byte for attenuator response, got 0".into(),
+        ));
+    }
+    Ok(data[0])
+}
+
 // ---------------------------------------------------------------
 // Response parsers
 // ---------------------------------------------------------------
@@ -409,6 +954,22 @@ pub fn parse_split_response(data: &[u8]) -> Result<bool> {
         ));
     }
     Ok(data[0] != 0x00)
+}
+
+/// Parse an antenna response from CI-V data bytes.
+///
+/// Expects 1 byte: 0x01 = ANT1, 0x02 = ANT2, etc.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data is empty.
+pub fn parse_antenna_response(data: &[u8]) -> Result<u8> {
+    if data.is_empty() {
+        return Err(Error::Protocol(
+            "expected 1 byte for antenna response, got 0".into(),
+        ));
+    }
+    Ok(data[0])
 }
 
 // ---------------------------------------------------------------
@@ -877,6 +1438,147 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cmd_read_cw_speed_bytes() {
+        let bytes = cmd_read_cw_speed(IC7610_ADDR);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_LEVEL,
+                SUB_CW_SPEED,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_cw_speed_mid() {
+        // Set speed to 128 => BCD 0128 => bytes [0x01, 0x28]
+        let bytes = cmd_set_cw_speed(IC7610_ADDR, 128);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_LEVEL,
+                SUB_CW_SPEED,
+                0x01,
+                0x28,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_cw_speed_max() {
+        // 255 => BCD 0255 => bytes [0x02, 0x55]
+        let bytes = cmd_set_cw_speed(IC7610_ADDR, 255);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_LEVEL,
+                SUB_CW_SPEED,
+                0x02,
+                0x55,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_vfo_a_eq_b_bytes() {
+        let bytes = cmd_vfo_a_eq_b(IC7610_ADDR);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_VFO_SELECT,
+                SUB_VFO_A_EQ_B,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_vfo_swap_bytes() {
+        let bytes = cmd_vfo_swap(IC7610_ADDR);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_VFO_SELECT,
+                SUB_VFO_SWAP,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_read_antenna_bytes() {
+        let bytes = cmd_read_antenna(IC7610_ADDR);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_ANTENNA,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_antenna_ant1() {
+        let bytes = cmd_set_antenna(IC7610_ADDR, 0x01);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_ANTENNA,
+                0x01,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_antenna_ant2() {
+        let bytes = cmd_set_antenna(IC7610_ADDR, 0x02);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_ANTENNA,
+                0x02,
+                0xFD
+            ]
+        );
+    }
+
     // ---------------------------------------------------------------
     // Response parsing
     // ---------------------------------------------------------------
@@ -1049,6 +1751,801 @@ mod tests {
     #[test]
     fn parse_split_empty() {
         assert!(parse_split_response(&[]).is_err());
+    }
+
+    #[test]
+    fn parse_antenna_ant1() {
+        assert_eq!(parse_antenna_response(&[0x01]).unwrap(), 0x01);
+    }
+
+    #[test]
+    fn parse_antenna_ant2() {
+        assert_eq!(parse_antenna_response(&[0x02]).unwrap(), 0x02);
+    }
+
+    #[test]
+    fn parse_antenna_empty() {
+        assert!(parse_antenna_response(&[]).is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // AGC commands
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_agc_mode_bytes() {
+        let bytes = cmd_read_agc_mode(IC7610_ADDR);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_FUNC,
+                SUB_AGC_MODE,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_agc_mode_fast() {
+        let bytes = cmd_set_agc_mode(IC7610_ADDR, 0x01);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_FUNC,
+                SUB_AGC_MODE,
+                0x01,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_agc_mode_mid() {
+        let bytes = cmd_set_agc_mode(IC7610_ADDR, 0x02);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_FUNC,
+                SUB_AGC_MODE,
+                0x02,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_agc_mode_slow() {
+        let bytes = cmd_set_agc_mode(IC7610_ADDR, 0x03);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_FUNC,
+                SUB_AGC_MODE,
+                0x03,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_read_agc_time_constant_bytes() {
+        let bytes = cmd_read_agc_time_constant(IC7610_ADDR);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_MISC,
+                SUB_AGC_TIME_CONSTANT,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_agc_time_constant_off() {
+        let bytes = cmd_set_agc_time_constant(IC7610_ADDR, 0x00);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_MISC,
+                SUB_AGC_TIME_CONSTANT,
+                0x00,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_agc_mode_fast() {
+        assert_eq!(parse_agc_mode_response(&[0x01]).unwrap(), 0x01);
+    }
+
+    #[test]
+    fn parse_agc_mode_mid() {
+        assert_eq!(parse_agc_mode_response(&[0x02]).unwrap(), 0x02);
+    }
+
+    #[test]
+    fn parse_agc_mode_slow() {
+        assert_eq!(parse_agc_mode_response(&[0x03]).unwrap(), 0x03);
+    }
+
+    #[test]
+    fn parse_agc_mode_empty() {
+        assert!(parse_agc_mode_response(&[]).is_err());
+    }
+
+    #[test]
+    fn parse_agc_time_constant_off() {
+        assert_eq!(parse_agc_time_constant_response(&[0x00]).unwrap(), 0x00);
+    }
+
+    #[test]
+    fn parse_agc_time_constant_empty() {
+        assert!(parse_agc_time_constant_response(&[]).is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Preamp commands
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_preamp_bytes() {
+        let bytes = cmd_read_preamp(IC7610_ADDR);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_FUNC,
+                SUB_PREAMP,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_preamp_off() {
+        let bytes = cmd_set_preamp(IC7610_ADDR, 0x00);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_FUNC,
+                SUB_PREAMP,
+                0x00,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_preamp_1() {
+        let bytes = cmd_set_preamp(IC7610_ADDR, 0x01);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_FUNC,
+                SUB_PREAMP,
+                0x01,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_preamp_2() {
+        let bytes = cmd_set_preamp(IC7610_ADDR, 0x02);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_FUNC,
+                SUB_PREAMP,
+                0x02,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_preamp_off() {
+        assert_eq!(parse_preamp_response(&[0x00]).unwrap(), 0x00);
+    }
+
+    #[test]
+    fn parse_preamp_1() {
+        assert_eq!(parse_preamp_response(&[0x01]).unwrap(), 0x01);
+    }
+
+    #[test]
+    fn parse_preamp_2() {
+        assert_eq!(parse_preamp_response(&[0x02]).unwrap(), 0x02);
+    }
+
+    #[test]
+    fn parse_preamp_empty() {
+        assert!(parse_preamp_response(&[]).is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Attenuator commands
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_attenuator_bytes() {
+        let bytes = cmd_read_attenuator(IC7610_ADDR);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_ATTENUATOR,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_attenuator_off() {
+        let bytes = cmd_set_attenuator(IC7610_ADDR, 0x00);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_ATTENUATOR,
+                0x00,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_attenuator_20db() {
+        let bytes = cmd_set_attenuator(IC7610_ADDR, 0x20);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_ATTENUATOR,
+                0x20,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_attenuator_off() {
+        assert_eq!(parse_attenuator_response(&[0x00]).unwrap(), 0x00);
+    }
+
+    #[test]
+    fn parse_attenuator_20db() {
+        assert_eq!(parse_attenuator_response(&[0x20]).unwrap(), 0x20);
+    }
+
+    #[test]
+    fn parse_attenuator_empty() {
+        assert!(parse_attenuator_response(&[]).is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // RIT/XIT commands
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_read_rit_on_bytes() {
+        let bytes = cmd_read_rit_on(IC7610_ADDR);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_RIT_ON_OFF,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_rit_on_true() {
+        let bytes = cmd_set_rit_on(IC7610_ADDR, true);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_RIT_ON_OFF,
+                0x01,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_rit_on_false() {
+        let bytes = cmd_set_rit_on(IC7610_ADDR, false);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_RIT_ON_OFF,
+                0x00,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_read_rit_offset_bytes() {
+        let bytes = cmd_read_rit_offset(IC7610_ADDR);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_RIT_OFFSET,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_rit_offset_positive_150() {
+        // +150 Hz = sign 0x00, BCD 0150 => [0x01, 0x50]
+        let bytes = cmd_set_rit_offset(IC7610_ADDR, 150);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_RIT_OFFSET,
+                0x00,
+                0x01,
+                0x50,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_rit_offset_negative_300() {
+        // -300 Hz = sign 0x01, BCD 0300 => [0x03, 0x00]
+        let bytes = cmd_set_rit_offset(IC7610_ADDR, -300);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_RIT_OFFSET,
+                0x01,
+                0x03,
+                0x00,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_rit_offset_zero() {
+        // 0 Hz = sign 0x00, BCD 0000 => [0x00, 0x00]
+        let bytes = cmd_set_rit_offset(IC7610_ADDR, 0);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_RIT_OFFSET,
+                0x00,
+                0x00,
+                0x00,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_rit_offset_max() {
+        // +9999 Hz = sign 0x00, BCD 9999 => [0x99, 0x99]
+        let bytes = cmd_set_rit_offset(IC7610_ADDR, 9999);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_RIT_OFFSET,
+                0x00,
+                0x99,
+                0x99,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_rit_offset_min() {
+        // -9999 Hz = sign 0x01, BCD 9999 => [0x99, 0x99]
+        let bytes = cmd_set_rit_offset(IC7610_ADDR, -9999);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_RIT_OFFSET,
+                0x01,
+                0x99,
+                0x99,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_read_xit_on_bytes() {
+        let bytes = cmd_read_xit_on(IC7610_ADDR);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_XIT_ON_OFF,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_xit_on_true() {
+        let bytes = cmd_set_xit_on(IC7610_ADDR, true);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_XIT_ON_OFF,
+                0x01,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_xit_on_false() {
+        let bytes = cmd_set_xit_on(IC7610_ADDR, false);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_XIT_ON_OFF,
+                0x00,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_read_xit_offset_bytes() {
+        let bytes = cmd_read_xit_offset(IC7610_ADDR);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_XIT_OFFSET,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_xit_offset_positive_500() {
+        // +500 Hz = sign 0x00, BCD 0500 => [0x05, 0x00]
+        let bytes = cmd_set_xit_offset(IC7610_ADDR, 500);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_XIT_OFFSET,
+                0x00,
+                0x05,
+                0x00,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_set_xit_offset_negative_1234() {
+        // -1234 Hz = sign 0x01, BCD 1234 => [0x12, 0x34]
+        let bytes = cmd_set_xit_offset(IC7610_ADDR, -1234);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                CMD_RIT_XIT,
+                SUB_XIT_OFFSET,
+                0x01,
+                0x12,
+                0x34,
+                0xFD
+            ]
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // RIT/XIT response parsing
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn parse_rit_on_true() {
+        assert!(parse_rit_on_response(&[0x01]).unwrap());
+    }
+
+    #[test]
+    fn parse_rit_on_false() {
+        assert!(!parse_rit_on_response(&[0x00]).unwrap());
+    }
+
+    #[test]
+    fn parse_rit_on_empty() {
+        assert!(parse_rit_on_response(&[]).is_err());
+    }
+
+    #[test]
+    fn parse_rit_offset_positive_150() {
+        // sign=0x00 (positive), BCD 0150 => [0x01, 0x50]
+        let offset = parse_rit_offset_response(&[0x00, 0x01, 0x50]).unwrap();
+        assert_eq!(offset, 150);
+    }
+
+    #[test]
+    fn parse_rit_offset_negative_300() {
+        // sign=0x01 (negative), BCD 0300 => [0x03, 0x00]
+        let offset = parse_rit_offset_response(&[0x01, 0x03, 0x00]).unwrap();
+        assert_eq!(offset, -300);
+    }
+
+    #[test]
+    fn parse_rit_offset_zero() {
+        let offset = parse_rit_offset_response(&[0x00, 0x00, 0x00]).unwrap();
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn parse_rit_offset_max() {
+        // +9999 Hz
+        let offset = parse_rit_offset_response(&[0x00, 0x99, 0x99]).unwrap();
+        assert_eq!(offset, 9999);
+    }
+
+    #[test]
+    fn parse_rit_offset_min() {
+        // -9999 Hz
+        let offset = parse_rit_offset_response(&[0x01, 0x99, 0x99]).unwrap();
+        assert_eq!(offset, -9999);
+    }
+
+    #[test]
+    fn parse_rit_offset_wrong_length() {
+        assert!(parse_rit_offset_response(&[0x00, 0x01]).is_err());
+        assert!(parse_rit_offset_response(&[0x00, 0x01, 0x50, 0x00]).is_err());
+        assert!(parse_rit_offset_response(&[]).is_err());
+    }
+
+    #[test]
+    fn parse_rit_offset_invalid_bcd() {
+        // 0xAB has invalid BCD digits
+        assert!(parse_rit_offset_response(&[0x00, 0xAB, 0x00]).is_err());
+    }
+
+    #[test]
+    fn parse_xit_on_true() {
+        assert!(parse_xit_on_response(&[0x01]).unwrap());
+    }
+
+    #[test]
+    fn parse_xit_on_false() {
+        assert!(!parse_xit_on_response(&[0x00]).unwrap());
+    }
+
+    #[test]
+    fn parse_xit_on_empty() {
+        assert!(parse_xit_on_response(&[]).is_err());
+    }
+
+    #[test]
+    fn parse_xit_offset_positive_500() {
+        let offset = parse_xit_offset_response(&[0x00, 0x05, 0x00]).unwrap();
+        assert_eq!(offset, 500);
+    }
+
+    #[test]
+    fn parse_xit_offset_negative_1234() {
+        let offset = parse_xit_offset_response(&[0x01, 0x12, 0x34]).unwrap();
+        assert_eq!(offset, -1234);
+    }
+
+    #[test]
+    fn parse_xit_offset_wrong_length() {
+        assert!(parse_xit_offset_response(&[0x00]).is_err());
+        assert!(parse_xit_offset_response(&[]).is_err());
+    }
+
+    #[test]
+    fn parse_xit_offset_invalid_bcd() {
+        assert!(parse_xit_offset_response(&[0x00, 0xF0, 0x00]).is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // RIT/XIT offset encode/decode round-trip
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn rit_offset_round_trip() {
+        for offset in [-9999, -1234, -300, -1, 0, 1, 150, 500, 9999] {
+            let encoded = encode_rit_xit_offset(offset);
+            let decoded = parse_rit_xit_offset_response(&encoded, "RIT").unwrap();
+            assert_eq!(
+                decoded, offset,
+                "round-trip failed for offset {offset}"
+            );
+        }
+    }
+
+    #[test]
+    fn rit_offset_clamp_overflow() {
+        // Values beyond +/-9999 should be clamped to 9999
+        let encoded = encode_rit_xit_offset(12345);
+        let decoded = parse_rit_xit_offset_response(&encoded, "RIT").unwrap();
+        assert_eq!(decoded, 9999);
+
+        let encoded = encode_rit_xit_offset(-12345);
+        let decoded = parse_rit_xit_offset_response(&encoded, "RIT").unwrap();
+        assert_eq!(decoded, -9999);
+    }
+
+    // ---------------------------------------------------------------
+    // CW message commands
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_send_cw_message_bytes() {
+        let bytes = cmd_send_cw_message(IC7610_ADDR, "CQ CQ");
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE, 0xFE, IC7610_ADDR, CONTROLLER_ADDR, 0x17,
+                0x43, 0x51, 0x20, 0x43, 0x51,
+                0xFD
+            ]
+        );
+    }
+
+    #[test]
+    fn cmd_send_cw_message_empty() {
+        let bytes = cmd_send_cw_message(IC7610_ADDR, "");
+        assert_eq!(
+            bytes,
+            vec![0xFE, 0xFE, IC7610_ADDR, CONTROLLER_ADDR, 0x17, 0xFD]
+        );
+    }
+
+    #[test]
+    fn cmd_send_cw_message_truncates_at_30() {
+        // 40 characters — should be truncated to 30
+        let long_text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD";
+        assert_eq!(long_text.len(), 40);
+        let bytes = cmd_send_cw_message(IC7610_ADDR, long_text);
+        // Frame: preamble (2) + addr (1) + ctrl (1) + cmd (1) + data (30) + end (1) = 36
+        assert_eq!(bytes.len(), 36);
+        // Data portion is bytes[5..35] — exactly 30 bytes
+        let data_portion = &bytes[5..35];
+        assert_eq!(data_portion.len(), 30);
+        assert_eq!(data_portion, b"ABCDEFGHIJKLMNOPQRSTUVWXYZ1234");
+    }
+
+    #[test]
+    fn cmd_stop_cw_message_bytes() {
+        let bytes = cmd_stop_cw_message(IC7610_ADDR);
+        assert_eq!(
+            bytes,
+            vec![
+                0xFE, 0xFE, IC7610_ADDR, CONTROLLER_ADDR, 0x17,
+                0xFF,
+                0xFD
+            ]
+        );
     }
 
     // ---------------------------------------------------------------

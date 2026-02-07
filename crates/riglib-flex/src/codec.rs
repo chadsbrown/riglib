@@ -103,6 +103,18 @@ pub fn cmd_slice_list() -> String {
     "slice list".to_string()
 }
 
+/// Build a slice set AGC mode command.
+///
+/// Example output: `"slice set 0 agc_mode=slow"`
+///
+/// # Arguments
+///
+/// * `slice_index` - Slice receiver index (0-7)
+/// * `mode` - AGC mode string: `"off"`, `"slow"`, `"med"`, `"fast"`
+pub fn cmd_slice_set_agc_mode(slice_index: u8, mode: &str) -> String {
+    format!("slice set {} agc_mode={}", slice_index, mode)
+}
+
 /// Build an xmit (PTT) command.
 ///
 /// Example output: `"xmit 1"` or `"xmit 0"`
@@ -183,6 +195,69 @@ pub fn cmd_stream_remove(stream_id: u32) -> String {
 /// Example output: `"slice set 0 dax=1"`
 pub fn cmd_slice_set_dax(slice_index: u8, dax_channel: u8) -> String {
     format!("slice set {} dax={}", slice_index, dax_channel)
+}
+
+/// Build a slice set RIT on/off command.
+///
+/// Example output: `"slice set 0 rit_on=1"` or `"slice set 0 rit_on=0"`
+pub fn cmd_slice_set_rit_on(slice_index: u8, on: bool) -> String {
+    format!("slice set {} rit_on={}", slice_index, if on { "1" } else { "0" })
+}
+
+/// Build a slice set RIT frequency offset command.
+///
+/// The offset is in Hz and may be negative.
+///
+/// Example output: `"slice set 0 rit_freq=150"` or `"slice set 0 rit_freq=-200"`
+pub fn cmd_slice_set_rit_freq(slice_index: u8, offset_hz: i32) -> String {
+    format!("slice set {} rit_freq={}", slice_index, offset_hz)
+}
+
+/// Build a slice set XIT on/off command.
+///
+/// Example output: `"slice set 0 xit_on=1"` or `"slice set 0 xit_on=0"`
+pub fn cmd_slice_set_xit_on(slice_index: u8, on: bool) -> String {
+    format!("slice set {} xit_on={}", slice_index, if on { "1" } else { "0" })
+}
+
+/// Build a slice set XIT frequency offset command.
+///
+/// The offset is in Hz and may be negative.
+///
+/// Example output: `"slice set 0 xit_freq=150"` or `"slice set 0 xit_freq=-200"`
+pub fn cmd_slice_set_xit_freq(slice_index: u8, offset_hz: i32) -> String {
+    format!("slice set {} xit_freq={}", slice_index, offset_hz)
+}
+
+// ---------------------------------------------------------------------------
+// CWX command helpers
+// ---------------------------------------------------------------------------
+
+/// Replace ASCII spaces (0x20) with DEL (0x7F) for SmartSDR CWX encoding.
+///
+/// SmartSDR uses space as a parameter delimiter, so literal spaces in CW text
+/// must be escaped to the DEL character (0x7F) so the radio can distinguish
+/// word boundaries from command structure.
+pub fn escape_cwx_text(text: &str) -> String {
+    text.replace(' ', "\x7F")
+}
+
+/// Build a CWX send command.
+///
+/// The text is escaped via [`escape_cwx_text`] and enclosed in double quotes.
+/// CWX is a global (not per-slice) command that uses the radio's CW transmitter.
+///
+/// Example output: `cwx send "CQ\x7FTEST"`
+pub fn cmd_cwx_send(text: &str) -> String {
+    format!("cwx send \"{}\"", escape_cwx_text(text))
+}
+
+/// Build a CWX clear command to abort any in-progress CW message and clear
+/// the buffer.
+///
+/// Example output: `"cwx clear"`
+pub fn cmd_cwx_clear() -> String {
+    "cwx clear".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +482,16 @@ pub struct SliceStatus {
     pub tx: Option<bool>,
     /// Whether this slice is the active slice (from `active` key).
     pub active: Option<bool>,
+    /// AGC mode string (from `agc_mode` key).
+    pub agc_mode: Option<String>,
+    /// Whether RIT is enabled (from `rit_on` key).
+    pub rit_on: Option<bool>,
+    /// RIT frequency offset in Hz (from `rit_freq` key).
+    pub rit_freq: Option<i32>,
+    /// Whether XIT is enabled (from `xit_on` key).
+    pub xit_on: Option<bool>,
+    /// XIT frequency offset in Hz (from `xit_freq` key).
+    pub xit_freq: Option<i32>,
 }
 
 /// Parse a slice status from key-value pairs and the object string.
@@ -433,6 +518,11 @@ pub fn parse_slice_status(params: &[(String, String)], object_str: &str) -> Resu
         filter_hi: None,
         tx: None,
         active: None,
+        agc_mode: None,
+        rit_on: None,
+        rit_freq: None,
+        xit_on: None,
+        xit_freq: None,
     };
 
     for (key, value) in params {
@@ -466,6 +556,29 @@ pub fn parse_slice_status(params: &[(String, String)], object_str: &str) -> Resu
             }
             "active" => {
                 status.active = Some(value == "1");
+            }
+            "agc_mode" => {
+                status.agc_mode = Some(value.clone());
+            }
+            "rit_on" => {
+                status.rit_on = Some(value == "1");
+            }
+            "rit_freq" => {
+                status.rit_freq = Some(
+                    value
+                        .parse::<i32>()
+                        .map_err(|_| Error::Protocol(format!("invalid rit_freq: {value}")))?,
+                );
+            }
+            "xit_on" => {
+                status.xit_on = Some(value == "1");
+            }
+            "xit_freq" => {
+                status.xit_freq = Some(
+                    value
+                        .parse::<i32>()
+                        .map_err(|_| Error::Protocol(format!("invalid xit_freq: {value}")))?,
+                );
             }
             _ => {
                 // Ignore unknown keys -- the radio may send fields we
@@ -663,6 +776,38 @@ mod tests {
     #[test]
     fn cmd_slice_list_basic() {
         assert_eq!(cmd_slice_list(), "slice list");
+    }
+
+    #[test]
+    fn cmd_slice_set_agc_mode_off() {
+        assert_eq!(
+            cmd_slice_set_agc_mode(0, "off"),
+            "slice set 0 agc_mode=off"
+        );
+    }
+
+    #[test]
+    fn cmd_slice_set_agc_mode_slow() {
+        assert_eq!(
+            cmd_slice_set_agc_mode(0, "slow"),
+            "slice set 0 agc_mode=slow"
+        );
+    }
+
+    #[test]
+    fn cmd_slice_set_agc_mode_med() {
+        assert_eq!(
+            cmd_slice_set_agc_mode(1, "med"),
+            "slice set 1 agc_mode=med"
+        );
+    }
+
+    #[test]
+    fn cmd_slice_set_agc_mode_fast() {
+        assert_eq!(
+            cmd_slice_set_agc_mode(3, "fast"),
+            "slice set 3 agc_mode=fast"
+        );
     }
 
     #[test]
@@ -1047,10 +1192,191 @@ mod tests {
     }
 
     #[test]
+    fn parse_slice_status_agc_mode() {
+        let params = vec![("agc_mode".into(), "slow".into())];
+        let ss = parse_slice_status(&params, "slice 0").unwrap();
+        assert_eq!(ss.agc_mode, Some("slow".into()));
+    }
+
+    #[test]
+    fn parse_slice_status_agc_mode_fast() {
+        let params = vec![("agc_mode".into(), "fast".into())];
+        let ss = parse_slice_status(&params, "slice 2").unwrap();
+        assert_eq!(ss.index, 2);
+        assert_eq!(ss.agc_mode, Some("fast".into()));
+    }
+
+    #[test]
+    fn parse_slice_status_agc_mode_absent() {
+        let params = vec![("mode".into(), "USB".into())];
+        let ss = parse_slice_status(&params, "slice 0").unwrap();
+        assert_eq!(ss.agc_mode, None);
+    }
+
+    #[test]
     fn parse_slice_status_tx_false() {
         let params = vec![("tx".into(), "0".into())];
         let ss = parse_slice_status(&params, "slice 0").unwrap();
         assert_eq!(ss.tx, Some(false));
+    }
+
+    // -- RIT/XIT command builders -------------------------------------------
+
+    #[test]
+    fn cmd_slice_set_rit_on_enable() {
+        assert_eq!(cmd_slice_set_rit_on(0, true), "slice set 0 rit_on=1");
+    }
+
+    #[test]
+    fn cmd_slice_set_rit_on_disable() {
+        assert_eq!(cmd_slice_set_rit_on(2, false), "slice set 2 rit_on=0");
+    }
+
+    #[test]
+    fn cmd_slice_set_rit_freq_positive() {
+        assert_eq!(
+            cmd_slice_set_rit_freq(0, 150),
+            "slice set 0 rit_freq=150"
+        );
+    }
+
+    #[test]
+    fn cmd_slice_set_rit_freq_negative() {
+        assert_eq!(
+            cmd_slice_set_rit_freq(1, -200),
+            "slice set 1 rit_freq=-200"
+        );
+    }
+
+    #[test]
+    fn cmd_slice_set_rit_freq_zero() {
+        assert_eq!(cmd_slice_set_rit_freq(0, 0), "slice set 0 rit_freq=0");
+    }
+
+    #[test]
+    fn cmd_slice_set_xit_on_enable() {
+        assert_eq!(cmd_slice_set_xit_on(0, true), "slice set 0 xit_on=1");
+    }
+
+    #[test]
+    fn cmd_slice_set_xit_on_disable() {
+        assert_eq!(cmd_slice_set_xit_on(3, false), "slice set 3 xit_on=0");
+    }
+
+    #[test]
+    fn cmd_slice_set_xit_freq_positive() {
+        assert_eq!(
+            cmd_slice_set_xit_freq(0, 500),
+            "slice set 0 xit_freq=500"
+        );
+    }
+
+    #[test]
+    fn cmd_slice_set_xit_freq_negative() {
+        assert_eq!(
+            cmd_slice_set_xit_freq(2, -300),
+            "slice set 2 xit_freq=-300"
+        );
+    }
+
+    #[test]
+    fn cmd_slice_set_xit_freq_zero() {
+        assert_eq!(cmd_slice_set_xit_freq(0, 0), "slice set 0 xit_freq=0");
+    }
+
+    // -- RIT/XIT slice status parsing ---------------------------------------
+
+    #[test]
+    fn parse_slice_status_rit_on() {
+        let params = vec![("rit_on".into(), "1".into())];
+        let ss = parse_slice_status(&params, "slice 0").unwrap();
+        assert_eq!(ss.rit_on, Some(true));
+    }
+
+    #[test]
+    fn parse_slice_status_rit_off() {
+        let params = vec![("rit_on".into(), "0".into())];
+        let ss = parse_slice_status(&params, "slice 0").unwrap();
+        assert_eq!(ss.rit_on, Some(false));
+    }
+
+    #[test]
+    fn parse_slice_status_rit_freq_positive() {
+        let params = vec![("rit_freq".into(), "150".into())];
+        let ss = parse_slice_status(&params, "slice 0").unwrap();
+        assert_eq!(ss.rit_freq, Some(150));
+    }
+
+    #[test]
+    fn parse_slice_status_rit_freq_negative() {
+        let params = vec![("rit_freq".into(), "-200".into())];
+        let ss = parse_slice_status(&params, "slice 1").unwrap();
+        assert_eq!(ss.rit_freq, Some(-200));
+    }
+
+    #[test]
+    fn parse_slice_status_rit_freq_invalid() {
+        let params = vec![("rit_freq".into(), "abc".into())];
+        assert!(parse_slice_status(&params, "slice 0").is_err());
+    }
+
+    #[test]
+    fn parse_slice_status_xit_on() {
+        let params = vec![("xit_on".into(), "1".into())];
+        let ss = parse_slice_status(&params, "slice 0").unwrap();
+        assert_eq!(ss.xit_on, Some(true));
+    }
+
+    #[test]
+    fn parse_slice_status_xit_off() {
+        let params = vec![("xit_on".into(), "0".into())];
+        let ss = parse_slice_status(&params, "slice 0").unwrap();
+        assert_eq!(ss.xit_on, Some(false));
+    }
+
+    #[test]
+    fn parse_slice_status_xit_freq_positive() {
+        let params = vec![("xit_freq".into(), "500".into())];
+        let ss = parse_slice_status(&params, "slice 0").unwrap();
+        assert_eq!(ss.xit_freq, Some(500));
+    }
+
+    #[test]
+    fn parse_slice_status_xit_freq_negative() {
+        let params = vec![("xit_freq".into(), "-300".into())];
+        let ss = parse_slice_status(&params, "slice 2").unwrap();
+        assert_eq!(ss.xit_freq, Some(-300));
+    }
+
+    #[test]
+    fn parse_slice_status_xit_freq_invalid() {
+        let params = vec![("xit_freq".into(), "xyz".into())];
+        assert!(parse_slice_status(&params, "slice 0").is_err());
+    }
+
+    #[test]
+    fn parse_slice_status_rit_xit_combined() {
+        let params = vec![
+            ("rit_on".into(), "1".into()),
+            ("rit_freq".into(), "150".into()),
+            ("xit_on".into(), "0".into()),
+            ("xit_freq".into(), "-100".into()),
+        ];
+        let ss = parse_slice_status(&params, "slice 0").unwrap();
+        assert_eq!(ss.rit_on, Some(true));
+        assert_eq!(ss.rit_freq, Some(150));
+        assert_eq!(ss.xit_on, Some(false));
+        assert_eq!(ss.xit_freq, Some(-100));
+    }
+
+    #[test]
+    fn parse_slice_status_rit_xit_absent() {
+        let params = vec![("mode".into(), "USB".into())];
+        let ss = parse_slice_status(&params, "slice 0").unwrap();
+        assert_eq!(ss.rit_on, None);
+        assert_eq!(ss.rit_freq, None);
+        assert_eq!(ss.xit_on, None);
+        assert_eq!(ss.xit_freq, None);
     }
 
     // -- Meter status parsing -----------------------------------------------
@@ -1095,5 +1421,52 @@ mod tests {
         assert_eq!(ms.id, 10);
         assert_eq!(ms.name, Some("power_forward".into()));
         assert_eq!(ms.source, Some("TX".into()));
+    }
+
+    // -- CWX command builders -----------------------------------------------
+
+    #[test]
+    fn cmd_cwx_send_simple() {
+        assert_eq!(cmd_cwx_send("CQ TEST"), "cwx send \"CQ\x7FTEST\"");
+    }
+
+    #[test]
+    fn cmd_cwx_send_no_spaces() {
+        assert_eq!(cmd_cwx_send("CQ"), "cwx send \"CQ\"");
+    }
+
+    #[test]
+    fn cmd_cwx_send_multiple_spaces() {
+        assert_eq!(
+            cmd_cwx_send("CQ DE W1AW"),
+            "cwx send \"CQ\x7FDE\x7FW1AW\""
+        );
+    }
+
+    #[test]
+    fn cmd_cwx_send_empty() {
+        assert_eq!(cmd_cwx_send(""), "cwx send \"\"");
+    }
+
+    #[test]
+    fn cmd_cwx_clear_basic() {
+        assert_eq!(cmd_cwx_clear(), "cwx clear");
+    }
+
+    // -- CWX escape helper --------------------------------------------------
+
+    #[test]
+    fn escape_cwx_text_basic() {
+        assert_eq!(escape_cwx_text("HELLO WORLD"), "HELLO\x7FWORLD");
+    }
+
+    #[test]
+    fn escape_cwx_text_no_spaces() {
+        assert_eq!(escape_cwx_text("HELLO"), "HELLO");
+    }
+
+    #[test]
+    fn escape_cwx_text_all_spaces() {
+        assert_eq!(escape_cwx_text("   "), "\x7F\x7F\x7F");
     }
 }

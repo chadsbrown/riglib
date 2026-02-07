@@ -700,6 +700,404 @@ impl Rig for IcomRig {
         }
     }
 
+    async fn get_cw_speed(&self) -> Result<u8> {
+        let cmd = commands::cmd_read_cw_speed(self.civ_address);
+        debug!("reading CW speed");
+        let frame = self.execute_command(&cmd).await?;
+        let data = Self::frame_payload(&frame);
+        if data.len() < 3 {
+            return Err(Error::Protocol(format!(
+                "CW speed response too short: {} bytes",
+                data.len()
+            )));
+        }
+        // Skip the sub-command echo byte (0x0C), parse 2 BCD bytes
+        let hi_byte = data[1];
+        let lo_byte = data[2];
+        let level = ((hi_byte >> 4) & 0x0F) as u32 * 1000
+            + (hi_byte & 0x0F) as u32 * 100
+            + ((lo_byte >> 4) & 0x0F) as u32 * 10
+            + (lo_byte & 0x0F) as u32;
+        let wpm = (6 + (level * 42 / 255)) as u8;
+        let _ = self.event_tx.send(RigEvent::CwSpeedChanged { wpm });
+        Ok(wpm)
+    }
+
+    async fn set_cw_speed(&self, wpm: u8) -> Result<()> {
+        let level = (((wpm as u32).saturating_sub(6)) * 255) / 42;
+        let level = level.min(255) as u16;
+        let cmd = commands::cmd_set_cw_speed(self.civ_address, level);
+        debug!(wpm, level, "setting CW speed");
+        self.execute_ack_command(&cmd).await?;
+        let _ = self.event_tx.send(RigEvent::CwSpeedChanged { wpm });
+        Ok(())
+    }
+
+    async fn set_vfo_a_eq_b(&self, _receiver: ReceiverId) -> Result<()> {
+        let cmd = commands::cmd_vfo_a_eq_b(self.civ_address);
+        debug!("setting VFO A=B");
+        self.execute_ack_command(&cmd).await
+    }
+
+    async fn swap_vfo(&self, _receiver: ReceiverId) -> Result<()> {
+        let cmd = commands::cmd_vfo_swap(self.civ_address);
+        debug!("swapping VFO A/B");
+        self.execute_ack_command(&cmd).await
+    }
+
+    async fn get_antenna(&self, _receiver: ReceiverId) -> Result<AntennaPort> {
+        let cmd = commands::cmd_read_antenna(self.civ_address);
+        debug!("reading antenna port");
+        let frame = self.execute_command(&cmd).await?;
+        let data = Self::frame_payload(&frame);
+        let ant_byte = commands::parse_antenna_response(&data)?;
+        let port = match ant_byte {
+            0x01 => AntennaPort::Ant1,
+            0x02 => AntennaPort::Ant2,
+            0x03 => AntennaPort::Ant3,
+            0x04 => AntennaPort::Ant4,
+            other => {
+                return Err(Error::Protocol(format!(
+                    "unknown antenna port byte: 0x{other:02X}"
+                )));
+            }
+        };
+        Ok(port)
+    }
+
+    async fn set_antenna(&self, _receiver: ReceiverId, port: AntennaPort) -> Result<()> {
+        let ant_byte = match port {
+            AntennaPort::Ant1 => 0x01,
+            AntennaPort::Ant2 => 0x02,
+            AntennaPort::Ant3 => 0x03,
+            AntennaPort::Ant4 => 0x04,
+        };
+        let cmd = commands::cmd_set_antenna(self.civ_address, ant_byte);
+        debug!(%port, "setting antenna port");
+        self.execute_ack_command(&cmd).await
+    }
+
+    async fn get_agc(&self, rx: ReceiverId) -> Result<AgcMode> {
+        self.select_receiver(rx).await?;
+
+        // On SDR-generation rigs, check time constant first for AGC off detection.
+        // These rigs don't support mode byte 0x00; instead, time constant 0 = AGC off.
+        if self.model.has_agc_time_constant {
+            let tc_cmd = commands::cmd_read_agc_time_constant(self.civ_address);
+            debug!(receiver = %rx, "reading AGC time constant");
+            let tc_frame = self.execute_command(&tc_cmd).await?;
+            let tc_data = Self::frame_payload(&tc_frame);
+            // Skip sub-command echo byte (0x04) if present
+            let tc_payload = if tc_data.len() >= 2 && tc_data[0] == 0x04 {
+                &tc_data[1..]
+            } else {
+                &tc_data
+            };
+            let tc = commands::parse_agc_time_constant_response(tc_payload)?;
+            if tc == 0x00 {
+                let mode = AgcMode::Off;
+                let _ = self
+                    .event_tx
+                    .send(RigEvent::AgcChanged { receiver: rx, mode });
+                return Ok(mode);
+            }
+        }
+
+        let cmd = commands::cmd_read_agc_mode(self.civ_address);
+        debug!(receiver = %rx, "reading AGC mode");
+        let frame = self.execute_command(&cmd).await?;
+        let data = Self::frame_payload(&frame);
+        // Skip sub-command echo byte (0x12) if present
+        let agc_payload = if data.len() >= 2 && data[0] == 0x12 {
+            &data[1..]
+        } else {
+            &data
+        };
+        let raw = commands::parse_agc_mode_response(agc_payload)?;
+
+        let mode = match raw {
+            0x00 => AgcMode::Off,
+            0x01 => AgcMode::Fast,
+            0x02 => AgcMode::Medium,
+            0x03 => AgcMode::Slow,
+            other => {
+                return Err(Error::Protocol(format!(
+                    "unknown AGC mode byte: 0x{other:02X}"
+                )));
+            }
+        };
+
+        let _ = self
+            .event_tx
+            .send(RigEvent::AgcChanged { receiver: rx, mode });
+        Ok(mode)
+    }
+
+    async fn set_agc(&self, rx: ReceiverId, mode: AgcMode) -> Result<()> {
+        self.select_receiver(rx).await?;
+
+        match mode {
+            AgcMode::Off => {
+                if self.model.has_agc_time_constant {
+                    // SDR-generation: set time constant to 0 to disable AGC
+                    let cmd = commands::cmd_set_agc_time_constant(self.civ_address, 0x00);
+                    debug!(receiver = %rx, "setting AGC off via time constant");
+                    self.execute_ack_command(&cmd).await?;
+                } else {
+                    // Older rigs: set AGC mode to 0x00 (off)
+                    let cmd = commands::cmd_set_agc_mode(self.civ_address, 0x00);
+                    debug!(receiver = %rx, "setting AGC off");
+                    self.execute_ack_command(&cmd).await?;
+                }
+            }
+            _ => {
+                let mode_byte = match mode {
+                    AgcMode::Fast => 0x01,
+                    AgcMode::Medium => 0x02,
+                    AgcMode::Slow => 0x03,
+                    _ => unreachable!(),
+                };
+                let cmd = commands::cmd_set_agc_mode(self.civ_address, mode_byte);
+                debug!(receiver = %rx, %mode, "setting AGC mode");
+                self.execute_ack_command(&cmd).await?;
+            }
+        }
+
+        let _ = self
+            .event_tx
+            .send(RigEvent::AgcChanged { receiver: rx, mode });
+        Ok(())
+    }
+
+    async fn get_preamp(&self, rx: ReceiverId) -> Result<PreampLevel> {
+        self.select_receiver(rx).await?;
+
+        let cmd = commands::cmd_read_preamp(self.civ_address);
+        debug!(receiver = %rx, "reading preamp level");
+        let frame = self.execute_command(&cmd).await?;
+        let data = Self::frame_payload(&frame);
+
+        // Skip the sub-command echo byte (0x02) if present, same pattern as AGC.
+        let preamp_payload = if data.len() >= 2 && data[0] == 0x02 {
+            &data[1..]
+        } else {
+            &data
+        };
+        let raw = commands::parse_preamp_response(preamp_payload)?;
+
+        let level = match raw {
+            0x00 => PreampLevel::Off,
+            0x01 => PreampLevel::Preamp1,
+            0x02 => PreampLevel::Preamp2,
+            other => {
+                return Err(Error::Protocol(format!(
+                    "unknown preamp level byte: 0x{other:02X}"
+                )));
+            }
+        };
+
+        let _ = self
+            .event_tx
+            .send(RigEvent::PreampChanged { receiver: rx, level });
+        Ok(level)
+    }
+
+    async fn set_preamp(&self, rx: ReceiverId, level: PreampLevel) -> Result<()> {
+        self.select_receiver(rx).await?;
+
+        // Gate Preamp2 on models that only support Preamp1.
+        if level == PreampLevel::Preamp2 && !self.model.has_preamp2 {
+            return Err(Error::Unsupported(format!(
+                "{} does not support Preamp 2",
+                self.model.name
+            )));
+        }
+
+        let raw = match level {
+            PreampLevel::Off => 0x00,
+            PreampLevel::Preamp1 => 0x01,
+            PreampLevel::Preamp2 => 0x02,
+        };
+
+        let cmd = commands::cmd_set_preamp(self.civ_address, raw);
+        debug!(receiver = %rx, %level, "setting preamp level");
+        self.execute_ack_command(&cmd).await?;
+
+        let _ = self
+            .event_tx
+            .send(RigEvent::PreampChanged { receiver: rx, level });
+        Ok(())
+    }
+
+    async fn get_attenuator(&self, rx: ReceiverId) -> Result<AttenuatorLevel> {
+        self.select_receiver(rx).await?;
+
+        let cmd = commands::cmd_read_attenuator(self.civ_address);
+        debug!(receiver = %rx, "reading attenuator level");
+        let frame = self.execute_command(&cmd).await?;
+        let data = Self::frame_payload(&frame);
+
+        let raw = commands::parse_attenuator_response(&data)?;
+
+        // Icom attenuators are binary: 0x00 = off, 0x20 = ~20 dB on.
+        // Map any non-zero value to Db12 (closest generic match).
+        let level = if raw == 0x00 {
+            AttenuatorLevel::Off
+        } else {
+            AttenuatorLevel::Db12
+        };
+
+        let _ = self.event_tx.send(RigEvent::AttenuatorChanged {
+            receiver: rx,
+            level,
+        });
+        Ok(level)
+    }
+
+    async fn set_attenuator(&self, rx: ReceiverId, level: AttenuatorLevel) -> Result<()> {
+        self.select_receiver(rx).await?;
+
+        // Icom attenuators are binary on/off. Any non-Off level maps to 0x20.
+        let raw = match level {
+            AttenuatorLevel::Off => 0x00,
+            _ => 0x20,
+        };
+
+        let cmd = commands::cmd_set_attenuator(self.civ_address, raw);
+        debug!(receiver = %rx, %level, "setting attenuator level");
+        self.execute_ack_command(&cmd).await?;
+
+        // Emit the level the user requested, not the mapped binary value.
+        let _ = self.event_tx.send(RigEvent::AttenuatorChanged {
+            receiver: rx,
+            level,
+        });
+        Ok(())
+    }
+
+    async fn get_rit(&self) -> Result<(bool, i32)> {
+        // Read RIT on/off state.
+        let on_cmd = commands::cmd_read_rit_on(self.civ_address);
+        debug!("reading RIT on/off");
+        let on_frame = self.execute_command(&on_cmd).await?;
+        let on_data = Self::frame_payload(&on_frame);
+        // Skip sub-command echo byte (0x01) if present.
+        let on_payload = if on_data.len() >= 2 && on_data[0] == 0x01 {
+            &on_data[1..]
+        } else {
+            &on_data
+        };
+        let enabled = commands::parse_rit_on_response(on_payload)?;
+
+        // Read RIT offset.
+        let offset_cmd = commands::cmd_read_rit_offset(self.civ_address);
+        debug!("reading RIT offset");
+        let offset_frame = self.execute_command(&offset_cmd).await?;
+        let offset_data = Self::frame_payload(&offset_frame);
+        // Skip sub-command echo byte (0x02) if present.
+        let offset_payload = if offset_data.len() >= 2 && offset_data[0] == 0x02 {
+            &offset_data[1..]
+        } else {
+            &offset_data
+        };
+        let offset_hz = commands::parse_rit_offset_response(offset_payload)?;
+
+        let _ = self
+            .event_tx
+            .send(RigEvent::RitChanged { enabled, offset_hz });
+        Ok((enabled, offset_hz))
+    }
+
+    async fn set_rit(&self, enabled: bool, offset_hz: i32) -> Result<()> {
+        let on_cmd = commands::cmd_set_rit_on(self.civ_address, enabled);
+        debug!(enabled, "setting RIT on/off");
+        self.execute_ack_command(&on_cmd).await?;
+
+        let offset_cmd = commands::cmd_set_rit_offset(self.civ_address, offset_hz);
+        debug!(offset_hz, "setting RIT offset");
+        self.execute_ack_command(&offset_cmd).await?;
+
+        let _ = self
+            .event_tx
+            .send(RigEvent::RitChanged { enabled, offset_hz });
+        Ok(())
+    }
+
+    async fn get_xit(&self) -> Result<(bool, i32)> {
+        // Read XIT on/off state.
+        let on_cmd = commands::cmd_read_xit_on(self.civ_address);
+        debug!("reading XIT on/off");
+        let on_frame = self.execute_command(&on_cmd).await?;
+        let on_data = Self::frame_payload(&on_frame);
+        // Skip sub-command echo byte (0x03) if present.
+        let on_payload = if on_data.len() >= 2 && on_data[0] == 0x03 {
+            &on_data[1..]
+        } else {
+            &on_data
+        };
+        let enabled = commands::parse_xit_on_response(on_payload)?;
+
+        // Read XIT offset.
+        let offset_cmd = commands::cmd_read_xit_offset(self.civ_address);
+        debug!("reading XIT offset");
+        let offset_frame = self.execute_command(&offset_cmd).await?;
+        let offset_data = Self::frame_payload(&offset_frame);
+        // Skip sub-command echo byte (0x04) if present.
+        let offset_payload = if offset_data.len() >= 2 && offset_data[0] == 0x04 {
+            &offset_data[1..]
+        } else {
+            &offset_data
+        };
+        let offset_hz = commands::parse_xit_offset_response(offset_payload)?;
+
+        let _ = self
+            .event_tx
+            .send(RigEvent::XitChanged { enabled, offset_hz });
+        Ok((enabled, offset_hz))
+    }
+
+    async fn set_xit(&self, enabled: bool, offset_hz: i32) -> Result<()> {
+        let on_cmd = commands::cmd_set_xit_on(self.civ_address, enabled);
+        debug!(enabled, "setting XIT on/off");
+        self.execute_ack_command(&on_cmd).await?;
+
+        let offset_cmd = commands::cmd_set_xit_offset(self.civ_address, offset_hz);
+        debug!(offset_hz, "setting XIT offset");
+        self.execute_ack_command(&offset_cmd).await?;
+
+        let _ = self
+            .event_tx
+            .send(RigEvent::XitChanged { enabled, offset_hz });
+        Ok(())
+    }
+
+    async fn send_cw_message(&self, message: &str) -> Result<()> {
+        // Chunk the message into segments of at most 30 characters each.
+        // The rig buffers internally and ACKs each frame, so no inter-chunk
+        // delay is needed.
+        let chunks: Vec<&str> = if message.is_empty() {
+            Vec::new()
+        } else {
+            message
+                .as_bytes()
+                .chunks(30)
+                .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
+                .collect()
+        };
+        for chunk in &chunks {
+            let cmd = commands::cmd_send_cw_message(self.civ_address, chunk);
+            debug!(chunk, "sending CW message chunk");
+            self.execute_ack_command(&cmd).await?;
+        }
+        Ok(())
+    }
+
+    async fn stop_cw_message(&self) -> Result<()> {
+        let cmd = commands::cmd_stop_cw_message(self.civ_address);
+        debug!("stopping CW message");
+        self.execute_ack_command(&cmd).await
+    }
+
     fn subscribe(&self) -> Result<broadcast::Receiver<RigEvent>> {
         Ok(self.event_tx.subscribe())
     }
@@ -1001,6 +1399,776 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
+    // CW speed
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_cw_speed() {
+        let mut mock = MockTransport::new();
+
+        // Read CW speed: rig responds with level 128 BCD = [0x01, 0x28]
+        let read_cmd = commands::cmd_read_cw_speed(IC7610_ADDR);
+        let cw_speed_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x14,
+            Some(0x0C),
+            &[0x01, 0x28],
+        );
+        mock.expect(&read_cmd, &echo_and_response(&read_cmd, &cw_speed_response));
+
+        let rig = make_test_rig(mock);
+        let wpm = rig.get_cw_speed().await.unwrap();
+        // level=128, wpm = 6 + (128 * 42 / 255) = 6 + 21 = 27
+        let expected_wpm = (6 + (128u32 * 42 / 255)) as u8;
+        assert_eq!(wpm, expected_wpm, "expected {expected_wpm} WPM, got {wpm}");
+    }
+
+    #[tokio::test]
+    async fn test_set_cw_speed() {
+        let mut mock = MockTransport::new();
+
+        // Set CW speed to 27 WPM => level = ((27-6) * 255) / 42 = 127
+        let level = ((27u32 - 6) * 255) / 42;
+        let set_cmd = commands::cmd_set_cw_speed(IC7610_ADDR, level as u16);
+        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.set_cw_speed(27).await.unwrap();
+    }
+
+    // -----------------------------------------------------------------
+    // VFO A=B / VFO Swap
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_set_vfo_a_eq_b() {
+        let mut mock = MockTransport::new();
+
+        let cmd = commands::cmd_vfo_a_eq_b(IC7610_ADDR);
+        mock.expect(&cmd, &echo_and_response(&cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.set_vfo_a_eq_b(ReceiverId::VFO_A).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_swap_vfo() {
+        let mut mock = MockTransport::new();
+
+        let cmd = commands::cmd_vfo_swap(IC7610_ADDR);
+        mock.expect(&cmd, &echo_and_response(&cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.swap_vfo(ReceiverId::VFO_A).await.unwrap();
+    }
+
+    // -----------------------------------------------------------------
+    // Antenna
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_antenna_ant1() {
+        let mut mock = MockTransport::new();
+
+        let read_cmd = commands::cmd_read_antenna(IC7610_ADDR);
+        let antenna_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x12,
+            None,
+            &[0x01],
+        );
+        mock.expect(&read_cmd, &echo_and_response(&read_cmd, &antenna_response));
+
+        let rig = make_test_rig(mock);
+        let port = rig.get_antenna(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(port, AntennaPort::Ant1);
+    }
+
+    #[tokio::test]
+    async fn test_get_antenna_ant2() {
+        let mut mock = MockTransport::new();
+
+        let read_cmd = commands::cmd_read_antenna(IC7610_ADDR);
+        let antenna_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x12,
+            None,
+            &[0x02],
+        );
+        mock.expect(&read_cmd, &echo_and_response(&read_cmd, &antenna_response));
+
+        let rig = make_test_rig(mock);
+        let port = rig.get_antenna(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(port, AntennaPort::Ant2);
+    }
+
+    #[tokio::test]
+    async fn test_set_antenna_ant1() {
+        let mut mock = MockTransport::new();
+
+        let set_cmd = commands::cmd_set_antenna(IC7610_ADDR, 0x01);
+        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.set_antenna(ReceiverId::VFO_A, AntennaPort::Ant1)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_antenna_ant2() {
+        let mut mock = MockTransport::new();
+
+        let set_cmd = commands::cmd_set_antenna(IC7610_ADDR, 0x02);
+        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.set_antenna(ReceiverId::VFO_A, AntennaPort::Ant2)
+            .await
+            .unwrap();
+    }
+
+    // -----------------------------------------------------------------
+    // AGC
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_agc_fast() {
+        let mut mock = MockTransport::new();
+
+        // Select main receiver
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        // IC-7610 is SDR: read time constant first => non-zero (AGC active)
+        let tc_cmd = commands::cmd_read_agc_time_constant(IC7610_ADDR);
+        let tc_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x1A,
+            Some(0x04),
+            &[0x05], // non-zero = AGC is on
+        );
+        mock.expect(&tc_cmd, &echo_and_response(&tc_cmd, &tc_response));
+
+        // Read AGC mode => fast (0x01)
+        let agc_cmd = commands::cmd_read_agc_mode(IC7610_ADDR);
+        let agc_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x16,
+            Some(0x12),
+            &[0x01],
+        );
+        mock.expect(&agc_cmd, &echo_and_response(&agc_cmd, &agc_response));
+
+        let rig = make_test_rig(mock);
+        let agc = rig.get_agc(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(agc, AgcMode::Fast);
+    }
+
+    #[tokio::test]
+    async fn test_get_agc_off_via_time_constant() {
+        let mut mock = MockTransport::new();
+
+        // Select main receiver
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        // IC-7610 is SDR: read time constant => 0x00 (AGC off)
+        let tc_cmd = commands::cmd_read_agc_time_constant(IC7610_ADDR);
+        let tc_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x1A,
+            Some(0x04),
+            &[0x00], // zero = AGC off
+        );
+        mock.expect(&tc_cmd, &echo_and_response(&tc_cmd, &tc_response));
+
+        // Should NOT read AGC mode (returns early)
+
+        let rig = make_test_rig(mock);
+        let agc = rig.get_agc(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(agc, AgcMode::Off);
+    }
+
+    #[tokio::test]
+    async fn test_get_agc_slow() {
+        let mut mock = MockTransport::new();
+
+        // Select main receiver
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        // IC-7610: time constant non-zero
+        let tc_cmd = commands::cmd_read_agc_time_constant(IC7610_ADDR);
+        let tc_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x1A,
+            Some(0x04),
+            &[0x10],
+        );
+        mock.expect(&tc_cmd, &echo_and_response(&tc_cmd, &tc_response));
+
+        // Read AGC mode => slow (0x03)
+        let agc_cmd = commands::cmd_read_agc_mode(IC7610_ADDR);
+        let agc_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x16,
+            Some(0x12),
+            &[0x03],
+        );
+        mock.expect(&agc_cmd, &echo_and_response(&agc_cmd, &agc_response));
+
+        let rig = make_test_rig(mock);
+        let agc = rig.get_agc(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(agc, AgcMode::Slow);
+    }
+
+    #[tokio::test]
+    async fn test_set_agc_fast() {
+        let mut mock = MockTransport::new();
+
+        // Select main receiver
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        // Set AGC mode to fast (0x01)
+        let set_cmd = commands::cmd_set_agc_mode(IC7610_ADDR, 0x01);
+        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Fast).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_agc_off_sdr_rig() {
+        let mut mock = MockTransport::new();
+
+        // Select main receiver
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        // IC-7610 is SDR: set AGC off via time constant = 0
+        let tc_cmd = commands::cmd_set_agc_time_constant(IC7610_ADDR, 0x00);
+        mock.expect(&tc_cmd, &echo_and_response(&tc_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Off).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_agc_off_older_rig() {
+        // Use IC-7600 (non-SDR, has_agc_time_constant = false)
+        const IC7600_ADDR: u8 = 0x7A;
+        let mut mock = MockTransport::new();
+
+        // IC-7600 is single-rx, VFO_A doesn't require receiver select
+
+        // Set AGC mode to 0x00 (off via mode byte)
+        let set_cmd = commands::cmd_set_agc_mode(IC7600_ADDR, 0x00);
+        let ack = civ::encode_frame(CONTROLLER_ADDR, IC7600_ADDR, civ::ACK, None, &[]);
+        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack));
+
+        use crate::models::ic_7600;
+        let rig = IcomRig::new(
+            Box::new(mock),
+            ic_7600(),
+            IC7600_ADDR,
+            true,
+            3,
+            true,
+            Duration::from_millis(500),
+            PttMethod::Cat,
+            KeyLine::None,
+            #[cfg(feature = "audio")]
+            None,
+        );
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Off).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_agc_event_emitted_on_set() {
+        let mut mock = MockTransport::new();
+
+        // Select main receiver
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        // Set AGC mode to medium
+        let set_cmd = commands::cmd_set_agc_mode(IC7610_ADDR, 0x02);
+        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Medium)
+            .await
+            .unwrap();
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::AgcChanged { receiver, mode } => {
+                assert_eq!(receiver, ReceiverId::VFO_A);
+                assert_eq!(mode, AgcMode::Medium);
+            }
+            other => panic!("expected AgcChanged, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Preamp
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_preamp_off() {
+        let mut mock = MockTransport::new();
+
+        // Select main receiver
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        // Read preamp: rig responds with preamp off (0x00)
+        let read_cmd = commands::cmd_read_preamp(IC7610_ADDR);
+        let preamp_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x16,
+            Some(0x02),
+            &[0x00],
+        );
+        mock.expect(&read_cmd, &echo_and_response(&read_cmd, &preamp_response));
+
+        let rig = make_test_rig(mock);
+        let level = rig.get_preamp(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(level, PreampLevel::Off);
+    }
+
+    #[tokio::test]
+    async fn test_get_preamp_1() {
+        let mut mock = MockTransport::new();
+
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        let read_cmd = commands::cmd_read_preamp(IC7610_ADDR);
+        let preamp_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x16,
+            Some(0x02),
+            &[0x01],
+        );
+        mock.expect(&read_cmd, &echo_and_response(&read_cmd, &preamp_response));
+
+        let rig = make_test_rig(mock);
+        let level = rig.get_preamp(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(level, PreampLevel::Preamp1);
+    }
+
+    #[tokio::test]
+    async fn test_get_preamp_2() {
+        let mut mock = MockTransport::new();
+
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        let read_cmd = commands::cmd_read_preamp(IC7610_ADDR);
+        let preamp_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x16,
+            Some(0x02),
+            &[0x02],
+        );
+        mock.expect(&read_cmd, &echo_and_response(&read_cmd, &preamp_response));
+
+        let rig = make_test_rig(mock);
+        let level = rig.get_preamp(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(level, PreampLevel::Preamp2);
+    }
+
+    #[tokio::test]
+    async fn test_set_preamp_1() {
+        let mut mock = MockTransport::new();
+
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        let set_cmd = commands::cmd_set_preamp(IC7610_ADDR, 0x01);
+        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.set_preamp(ReceiverId::VFO_A, PreampLevel::Preamp1)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_preamp_2_on_7610() {
+        let mut mock = MockTransport::new();
+
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        let set_cmd = commands::cmd_set_preamp(IC7610_ADDR, 0x02);
+        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        // IC-7610 has_preamp2 = true, so this should succeed
+        rig.set_preamp(ReceiverId::VFO_A, PreampLevel::Preamp2)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_preamp_2_on_7300_returns_unsupported() {
+        // IC-7300 has_preamp2 = false
+        const IC7300_ADDR: u8 = 0x94;
+        let mock = MockTransport::new();
+
+        use crate::models::ic_7300;
+        let rig = IcomRig::new(
+            Box::new(mock),
+            ic_7300(),
+            IC7300_ADDR,
+            true,
+            3,
+            true,
+            Duration::from_millis(500),
+            PttMethod::Cat,
+            KeyLine::None,
+            #[cfg(feature = "audio")]
+            None,
+        );
+
+        let result = rig
+            .set_preamp(ReceiverId::VFO_A, PreampLevel::Preamp2)
+            .await;
+        assert!(result.is_err());
+        match result {
+            Err(Error::Unsupported(msg)) => {
+                assert!(
+                    msg.contains("Preamp 2"),
+                    "expected message about Preamp 2, got: {msg}"
+                );
+            }
+            other => panic!("expected Unsupported error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_preamp_event_emitted_on_set() {
+        let mut mock = MockTransport::new();
+
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        let set_cmd = commands::cmd_set_preamp(IC7610_ADDR, 0x01);
+        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        rig.set_preamp(ReceiverId::VFO_A, PreampLevel::Preamp1)
+            .await
+            .unwrap();
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::PreampChanged { receiver, level } => {
+                assert_eq!(receiver, ReceiverId::VFO_A);
+                assert_eq!(level, PreampLevel::Preamp1);
+            }
+            other => panic!("expected PreampChanged, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Attenuator
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_attenuator_off() {
+        let mut mock = MockTransport::new();
+
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        // Read attenuator: rig responds with att off (0x00)
+        // Attenuator uses cmd 0x11 with no sub-command
+        let read_cmd = commands::cmd_read_attenuator(IC7610_ADDR);
+        let att_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x11,
+            None,
+            &[0x00],
+        );
+        mock.expect(&read_cmd, &echo_and_response(&read_cmd, &att_response));
+
+        let rig = make_test_rig(mock);
+        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(level, AttenuatorLevel::Off);
+    }
+
+    #[tokio::test]
+    async fn test_get_attenuator_on() {
+        let mut mock = MockTransport::new();
+
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        let read_cmd = commands::cmd_read_attenuator(IC7610_ADDR);
+        let att_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x11,
+            None,
+            &[0x20],
+        );
+        mock.expect(&read_cmd, &echo_and_response(&read_cmd, &att_response));
+
+        let rig = make_test_rig(mock);
+        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        // Icom 0x20 maps to Db12 as the closest generic match
+        assert_eq!(level, AttenuatorLevel::Db12);
+    }
+
+    #[tokio::test]
+    async fn test_set_attenuator_off() {
+        let mut mock = MockTransport::new();
+
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        let set_cmd = commands::cmd_set_attenuator(IC7610_ADDR, 0x00);
+        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Off)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_attenuator_db12_maps_to_0x20() {
+        let mut mock = MockTransport::new();
+
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        // Any non-Off level maps to 0x20 on Icom
+        let set_cmd = commands::cmd_set_attenuator(IC7610_ADDR, 0x20);
+        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db12)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_attenuator_db6_also_maps_to_0x20() {
+        let mut mock = MockTransport::new();
+
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        // Db6 also maps to 0x20 (Icom attenuator is binary)
+        let set_cmd = commands::cmd_set_attenuator(IC7610_ADDR, 0x20);
+        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db6)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_attenuator_event_emitted_on_set() {
+        let mut mock = MockTransport::new();
+
+        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
+        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
+
+        let set_cmd = commands::cmd_set_attenuator(IC7610_ADDR, 0x20);
+        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db18)
+            .await
+            .unwrap();
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::AttenuatorChanged { receiver, level } => {
+                assert_eq!(receiver, ReceiverId::VFO_A);
+                // Event should emit the user-requested level, not the mapped binary
+                assert_eq!(level, AttenuatorLevel::Db18);
+            }
+            other => panic!("expected AttenuatorChanged, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // RIT
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_rit() {
+        let mut mock = MockTransport::new();
+
+        // Read RIT on/off: rig responds with RIT on (0x01)
+        let on_cmd = commands::cmd_read_rit_on(IC7610_ADDR);
+        let on_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x21,
+            Some(0x01),
+            &[0x01],
+        );
+        mock.expect(&on_cmd, &echo_and_response(&on_cmd, &on_response));
+
+        // Read RIT offset: rig responds with +150 Hz
+        // sign=0x00 (positive), BCD 0150 => [0x01, 0x50]
+        let offset_cmd = commands::cmd_read_rit_offset(IC7610_ADDR);
+        let offset_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x21,
+            Some(0x02),
+            &[0x00, 0x01, 0x50],
+        );
+        mock.expect(&offset_cmd, &echo_and_response(&offset_cmd, &offset_response));
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        let (enabled, offset_hz) = rig.get_rit().await.unwrap();
+        assert!(enabled);
+        assert_eq!(offset_hz, 150);
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::RitChanged { enabled, offset_hz } => {
+                assert!(enabled);
+                assert_eq!(offset_hz, 150);
+            }
+            other => panic!("expected RitChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_rit() {
+        let mut mock = MockTransport::new();
+
+        // Set RIT on
+        let on_cmd = commands::cmd_set_rit_on(IC7610_ADDR, true);
+        mock.expect(&on_cmd, &echo_and_response(&on_cmd, &ack_frame()));
+
+        // Set RIT offset to -300 Hz
+        let offset_cmd = commands::cmd_set_rit_offset(IC7610_ADDR, -300);
+        mock.expect(&offset_cmd, &echo_and_response(&offset_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        rig.set_rit(true, -300).await.unwrap();
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::RitChanged { enabled, offset_hz } => {
+                assert!(enabled);
+                assert_eq!(offset_hz, -300);
+            }
+            other => panic!("expected RitChanged, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // XIT
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_xit() {
+        let mut mock = MockTransport::new();
+
+        // Read XIT on/off: rig responds with XIT off (0x00)
+        let on_cmd = commands::cmd_read_xit_on(IC7610_ADDR);
+        let on_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x21,
+            Some(0x03),
+            &[0x00],
+        );
+        mock.expect(&on_cmd, &echo_and_response(&on_cmd, &on_response));
+
+        // Read XIT offset: rig responds with +500 Hz
+        let offset_cmd = commands::cmd_read_xit_offset(IC7610_ADDR);
+        let offset_response = civ::encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x21,
+            Some(0x04),
+            &[0x00, 0x05, 0x00],
+        );
+        mock.expect(&offset_cmd, &echo_and_response(&offset_cmd, &offset_response));
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        let (enabled, offset_hz) = rig.get_xit().await.unwrap();
+        assert!(!enabled);
+        assert_eq!(offset_hz, 500);
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::XitChanged { enabled, offset_hz } => {
+                assert!(!enabled);
+                assert_eq!(offset_hz, 500);
+            }
+            other => panic!("expected XitChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_xit() {
+        let mut mock = MockTransport::new();
+
+        // Set XIT off
+        let on_cmd = commands::cmd_set_xit_on(IC7610_ADDR, false);
+        mock.expect(&on_cmd, &echo_and_response(&on_cmd, &ack_frame()));
+
+        // Set XIT offset to 0 Hz
+        let offset_cmd = commands::cmd_set_xit_offset(IC7610_ADDR, 0);
+        mock.expect(&offset_cmd, &echo_and_response(&offset_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        rig.set_xit(false, 0).await.unwrap();
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::XitChanged { enabled, offset_hz } => {
+                assert!(!enabled);
+                assert_eq!(offset_hz, 0);
+            }
+            other => panic!("expected XitChanged, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------
     // subscribe
     // -----------------------------------------------------------------
 
@@ -1232,6 +2400,63 @@ mod tests {
             }
             other => panic!("expected FrequencyChanged, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------
+    // CW message sending
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_send_cw_message() {
+        let mut mock = MockTransport::new();
+
+        // Short message (under 30 chars) — single chunk
+        let cw_cmd = commands::cmd_send_cw_message(IC7610_ADDR, "CQ CQ DE W1AW");
+        mock.expect(&cw_cmd, &echo_and_response(&cw_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.send_cw_message("CQ CQ DE W1AW").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_send_cw_message_chunked() {
+        let mut mock = MockTransport::new();
+
+        // 50-character message — should be split into two chunks (30 + 20)
+        let message = "CQ CQ CQ DE W1AW W1AW W1AW K  CQ CQ CQ DE W1AW PSE";
+        assert_eq!(message.len(), 50);
+
+        let chunk1 = &message[..30];
+        let chunk2 = &message[30..];
+
+        let cmd1 = commands::cmd_send_cw_message(IC7610_ADDR, chunk1);
+        mock.expect(&cmd1, &echo_and_response(&cmd1, &ack_frame()));
+
+        let cmd2 = commands::cmd_send_cw_message(IC7610_ADDR, chunk2);
+        mock.expect(&cmd2, &echo_and_response(&cmd2, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.send_cw_message(message).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_stop_cw_message() {
+        let mut mock = MockTransport::new();
+
+        let stop_cmd = commands::cmd_stop_cw_message(IC7610_ADDR);
+        mock.expect(&stop_cmd, &echo_and_response(&stop_cmd, &ack_frame()));
+
+        let rig = make_test_rig(mock);
+        rig.stop_cw_message().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_send_cw_message_empty() {
+        let mock = MockTransport::new();
+
+        // Empty string — no chunks to send, should succeed immediately
+        let rig = make_test_rig(mock);
+        rig.send_cw_message("").await.unwrap();
     }
 
     // -----------------------------------------------------------------

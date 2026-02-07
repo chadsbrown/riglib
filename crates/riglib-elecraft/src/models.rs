@@ -53,6 +53,11 @@ pub struct ElecraftModel {
     /// The K4 has a built-in sub receiver. KX3/KX2 are single-receiver
     /// portables.
     pub has_sub_receiver: bool,
+    /// RIT/XIT offset step size in hertz for the `RU;`/`RD;` commands.
+    ///
+    /// K3/K3S/KX3/KX2 use 10 Hz steps. The K4, with its direct-sampling
+    /// SDR architecture, provides 1 Hz resolution.
+    pub rit_step_hz: u16,
 }
 
 impl From<&ElecraftModel> for RigDefinition {
@@ -125,9 +130,14 @@ pub fn k3() -> ElecraftModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
         is_k4: false,
         has_sub_receiver: true,
+        rit_step_hz: 10,
     }
 }
 
@@ -157,9 +167,14 @@ pub fn k3s() -> ElecraftModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
         is_k4: false,
         has_sub_receiver: true,
+        rit_step_hz: 10,
     }
 }
 
@@ -191,9 +206,14 @@ pub fn kx3() -> ElecraftModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 15.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
         is_k4: false,
         has_sub_receiver: false,
+        rit_step_hz: 10,
     }
 }
 
@@ -223,9 +243,14 @@ pub fn kx2() -> ElecraftModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 10.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
         is_k4: false,
         has_sub_receiver: false,
+        rit_step_hz: 10,
     }
 }
 
@@ -257,9 +282,14 @@ pub fn k4() -> ElecraftModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            has_rit: true,
+            has_xit: true,
+            has_cw_messages: true,
+            ..Default::default()
         },
         is_k4: true,
         has_sub_receiver: true,
+        rit_step_hz: 1,
     }
 }
 
@@ -603,5 +633,41 @@ mod tests {
     #[test]
     fn k4_uses_k4_model_id() {
         assert_eq!(k4().model_id, "K4");
+    }
+
+    #[test]
+    fn all_models_have_cw_messages() {
+        for model in all_elecraft_models() {
+            assert!(
+                model.capabilities.has_cw_messages,
+                "{} should support CW messages",
+                model.name
+            );
+        }
+    }
+
+    #[test]
+    fn all_models_have_rit_xit() {
+        for model in all_elecraft_models() {
+            assert!(
+                model.capabilities.has_rit,
+                "{} should support RIT",
+                model.name
+            );
+            assert!(
+                model.capabilities.has_xit,
+                "{} should support XIT",
+                model.name
+            );
+        }
+    }
+
+    #[test]
+    fn rit_step_hz_values() {
+        assert_eq!(k3().rit_step_hz, 10);
+        assert_eq!(k3s().rit_step_hz, 10);
+        assert_eq!(kx3().rit_step_hz, 10);
+        assert_eq!(kx2().rit_step_hz, 10);
+        assert_eq!(k4().rit_step_hz, 1);
     }
 }

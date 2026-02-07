@@ -116,11 +116,15 @@ fn flex_capabilities(max_slices: u8) -> RigCapabilities {
         max_receivers: max_slices,
         has_sub_receiver: max_slices > 1,
         has_split: true,
+        has_rit: true,
+        has_xit: true,
         has_audio_streaming: true,
         has_iq_output: true,
         supported_modes: flex_modes(),
         frequency_ranges: hf_6m_range(),
         max_power_watts: 100.0,
+        has_cw_messages: true,
+        ..Default::default()
     }
 }
 
@@ -631,6 +635,33 @@ mod tests {
             assert!(
                 model.capabilities.has_audio_streaming,
                 "{} should have audio streaming (DAX audio)",
+                model.name
+            );
+        }
+    }
+
+    #[test]
+    fn all_models_have_rit_xit() {
+        for model in all_flex_models() {
+            assert!(
+                model.capabilities.has_rit,
+                "{} should support RIT",
+                model.name
+            );
+            assert!(
+                model.capabilities.has_xit,
+                "{} should support XIT",
+                model.name
+            );
+        }
+    }
+
+    #[test]
+    fn all_models_have_cw_messages() {
+        for model in all_flex_models() {
+            assert!(
+                model.capabilities.has_cw_messages,
+                "{} should support CW messages (CWX)",
                 model.name
             );
         }

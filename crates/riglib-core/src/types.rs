@@ -315,6 +315,158 @@ impl fmt::Display for BandRange {
     }
 }
 
+/// AGC (Automatic Gain Control) mode setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AgcMode {
+    /// AGC disabled.
+    Off,
+    /// Fast AGC — quick attack and release, typical for CW contesting.
+    Fast,
+    /// Medium AGC — balanced for SSB voice.
+    Medium,
+    /// Slow AGC — long time constant, useful for AM broadcast monitoring.
+    Slow,
+}
+
+impl fmt::Display for AgcMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            AgcMode::Off => "OFF",
+            AgcMode::Fast => "FAST",
+            AgcMode::Medium => "MED",
+            AgcMode::Slow => "SLOW",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl FromStr for AgcMode {
+    type Err = ParseModeError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_uppercase().as_str() {
+            "OFF" => Ok(AgcMode::Off),
+            "FAST" => Ok(AgcMode::Fast),
+            "MED" | "MEDIUM" => Ok(AgcMode::Medium),
+            "SLOW" => Ok(AgcMode::Slow),
+            _ => Err(ParseModeError(s.to_string())),
+        }
+    }
+}
+
+/// Preamplifier level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PreampLevel {
+    /// Preamp off.
+    Off,
+    /// Preamp stage 1 (typically +10 dB).
+    Preamp1,
+    /// Preamp stage 2 (typically +20 dB).
+    Preamp2,
+}
+
+impl fmt::Display for PreampLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            PreampLevel::Off => "OFF",
+            PreampLevel::Preamp1 => "P1",
+            PreampLevel::Preamp2 => "P2",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl FromStr for PreampLevel {
+    type Err = ParseModeError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_uppercase().as_str() {
+            "OFF" | "0" => Ok(PreampLevel::Off),
+            "1" | "P1" | "PREAMP1" => Ok(PreampLevel::Preamp1),
+            "2" | "P2" | "PREAMP2" => Ok(PreampLevel::Preamp2),
+            _ => Err(ParseModeError(s.to_string())),
+        }
+    }
+}
+
+/// RF attenuator level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AttenuatorLevel {
+    /// Attenuator off (0 dB).
+    Off,
+    /// 6 dB attenuation.
+    Db6,
+    /// 12 dB attenuation.
+    Db12,
+    /// 18 dB attenuation.
+    Db18,
+}
+
+impl fmt::Display for AttenuatorLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            AttenuatorLevel::Off => "OFF",
+            AttenuatorLevel::Db6 => "6dB",
+            AttenuatorLevel::Db12 => "12dB",
+            AttenuatorLevel::Db18 => "18dB",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl FromStr for AttenuatorLevel {
+    type Err = ParseModeError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_uppercase().as_str() {
+            "OFF" | "0" => Ok(AttenuatorLevel::Off),
+            "6" | "6DB" => Ok(AttenuatorLevel::Db6),
+            "12" | "12DB" => Ok(AttenuatorLevel::Db12),
+            "18" | "18DB" => Ok(AttenuatorLevel::Db18),
+            _ => Err(ParseModeError(s.to_string())),
+        }
+    }
+}
+
+/// Antenna port selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AntennaPort {
+    /// Antenna port 1 (ANT1).
+    Ant1,
+    /// Antenna port 2 (ANT2).
+    Ant2,
+    /// Antenna port 3 (ANT3).
+    Ant3,
+    /// Antenna port 4 (ANT4).
+    Ant4,
+}
+
+impl fmt::Display for AntennaPort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            AntennaPort::Ant1 => "ANT1",
+            AntennaPort::Ant2 => "ANT2",
+            AntennaPort::Ant3 => "ANT3",
+            AntennaPort::Ant4 => "ANT4",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl FromStr for AntennaPort {
+    type Err = ParseModeError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_uppercase().as_str() {
+            "1" | "ANT1" => Ok(AntennaPort::Ant1),
+            "2" | "ANT2" => Ok(AntennaPort::Ant2),
+            "3" | "ANT3" => Ok(AntennaPort::Ant3),
+            "4" | "ANT4" => Ok(AntennaPort::Ant4),
+            _ => Err(ParseModeError(s.to_string())),
+        }
+    }
+}
+
 /// How PTT (push-to-talk) is activated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PttMethod {
@@ -364,6 +516,54 @@ pub struct RigCapabilities {
     pub frequency_ranges: Vec<BandRange>,
     /// Maximum transmit power in watts.
     pub max_power_watts: f32,
+    /// AGC modes supported by this rig.
+    pub agc_modes: Vec<AgcMode>,
+    /// Preamp levels supported by this rig.
+    pub preamp_levels: Vec<PreampLevel>,
+    /// Attenuator levels supported by this rig.
+    pub attenuator_levels: Vec<AttenuatorLevel>,
+    /// Antenna ports available on this rig.
+    pub antenna_ports: Vec<AntennaPort>,
+    /// Whether the rig supports RIT (Receiver Incremental Tuning).
+    pub has_rit: bool,
+    /// Whether the rig supports XIT (Transmitter Incremental Tuning).
+    pub has_xit: bool,
+    /// Whether the rig has a built-in CW keyer with adjustable speed.
+    pub has_cw_keyer: bool,
+    /// Whether the rig can send CW messages from memory or text input.
+    pub has_cw_messages: bool,
+    /// Whether the rig supports VFO A=B (copy active VFO to inactive).
+    pub has_vfo_ab_swap: bool,
+    /// Whether the rig supports VFO swap (exchange A and B).
+    pub has_vfo_ab_equal: bool,
+    /// Whether the rig supports transceive (AI) mode for unsolicited state updates.
+    pub has_transceive: bool,
+}
+
+impl Default for RigCapabilities {
+    fn default() -> Self {
+        RigCapabilities {
+            max_receivers: 1,
+            has_sub_receiver: false,
+            has_split: false,
+            has_audio_streaming: false,
+            has_iq_output: false,
+            supported_modes: Vec::new(),
+            frequency_ranges: Vec::new(),
+            max_power_watts: 0.0,
+            agc_modes: Vec::new(),
+            preamp_levels: Vec::new(),
+            attenuator_levels: Vec::new(),
+            antenna_ports: Vec::new(),
+            has_rit: false,
+            has_xit: false,
+            has_cw_keyer: false,
+            has_cw_messages: false,
+            has_vfo_ab_swap: false,
+            has_vfo_ab_equal: false,
+            has_transceive: false,
+        }
+    }
 }
 
 #[cfg(test)]

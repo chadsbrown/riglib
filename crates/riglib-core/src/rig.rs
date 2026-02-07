@@ -114,6 +114,163 @@ pub trait Rig: Send + Sync {
     /// is configured or the transport doesn't support it.
     async fn set_cw_key(&self, on: bool) -> Result<()>;
 
+    /// Get the current CW keyer speed in words per minute.
+    async fn get_cw_speed(&self) -> Result<u8> {
+        Err(crate::error::Error::Unsupported(
+            "CW speed control not supported".into(),
+        ))
+    }
+
+    /// Set the CW keyer speed in words per minute.
+    async fn set_cw_speed(&self, _wpm: u8) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "CW speed control not supported".into(),
+        ))
+    }
+
+    /// Copy the active VFO to the inactive VFO (VFO A=B).
+    async fn set_vfo_a_eq_b(&self, _receiver: ReceiverId) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "VFO A=B not supported".into(),
+        ))
+    }
+
+    /// Swap VFO A and VFO B frequencies.
+    async fn swap_vfo(&self, _receiver: ReceiverId) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "VFO swap not supported".into(),
+        ))
+    }
+
+    /// Get the currently selected antenna port for a receiver.
+    async fn get_antenna(&self, _receiver: ReceiverId) -> Result<AntennaPort> {
+        Err(crate::error::Error::Unsupported(
+            "antenna port selection not supported".into(),
+        ))
+    }
+
+    /// Set the antenna port for a receiver.
+    async fn set_antenna(&self, _receiver: ReceiverId, _port: AntennaPort) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "antenna port selection not supported".into(),
+        ))
+    }
+
+    /// Get the current AGC mode for a receiver.
+    async fn get_agc(&self, _receiver: ReceiverId) -> Result<AgcMode> {
+        Err(crate::error::Error::Unsupported(
+            "AGC control not supported".into(),
+        ))
+    }
+
+    /// Set the AGC mode for a receiver.
+    async fn set_agc(&self, _receiver: ReceiverId, _mode: AgcMode) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "AGC control not supported".into(),
+        ))
+    }
+
+    /// Get the current preamp level for a receiver.
+    async fn get_preamp(&self, _receiver: ReceiverId) -> Result<PreampLevel> {
+        Err(crate::error::Error::Unsupported(
+            "preamp control not supported".into(),
+        ))
+    }
+
+    /// Set the preamp level for a receiver.
+    async fn set_preamp(&self, _receiver: ReceiverId, _level: PreampLevel) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "preamp control not supported".into(),
+        ))
+    }
+
+    /// Get the current attenuator level for a receiver.
+    async fn get_attenuator(&self, _receiver: ReceiverId) -> Result<AttenuatorLevel> {
+        Err(crate::error::Error::Unsupported(
+            "attenuator control not supported".into(),
+        ))
+    }
+
+    /// Set the attenuator level for a receiver.
+    async fn set_attenuator(
+        &self,
+        _receiver: ReceiverId,
+        _level: AttenuatorLevel,
+    ) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "attenuator control not supported".into(),
+        ))
+    }
+
+    /// Get the current RIT (Receiver Incremental Tuning) state and offset.
+    ///
+    /// Returns `(enabled, offset_hz)` where `offset_hz` can be negative.
+    async fn get_rit(&self) -> Result<(bool, i32)> {
+        Err(crate::error::Error::Unsupported(
+            "RIT not supported".into(),
+        ))
+    }
+
+    /// Set the RIT state and offset in hertz.
+    async fn set_rit(&self, _enabled: bool, _offset_hz: i32) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "RIT not supported".into(),
+        ))
+    }
+
+    /// Get the current XIT (Transmitter Incremental Tuning) state and offset.
+    ///
+    /// Returns `(enabled, offset_hz)` where `offset_hz` can be negative.
+    async fn get_xit(&self) -> Result<(bool, i32)> {
+        Err(crate::error::Error::Unsupported(
+            "XIT not supported".into(),
+        ))
+    }
+
+    /// Set the XIT state and offset in hertz.
+    async fn set_xit(&self, _enabled: bool, _offset_hz: i32) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "XIT not supported".into(),
+        ))
+    }
+
+    /// Send a CW message as text.
+    ///
+    /// The rig's built-in keyer will convert the text to Morse code at the
+    /// current keyer speed. The maximum message length varies by manufacturer
+    /// (typically 24-30 characters). Longer messages will be chunked
+    /// automatically where supported.
+    async fn send_cw_message(&self, _message: &str) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "CW message sending not supported".into(),
+        ))
+    }
+
+    /// Stop any in-progress CW message transmission.
+    async fn stop_cw_message(&self) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "CW message sending not supported".into(),
+        ))
+    }
+
+    /// Enable transceive (AI) mode for automatic state updates.
+    ///
+    /// When enabled, the rig will automatically send status updates when
+    /// the user changes settings on the front panel. These are emitted
+    /// as events via the [`subscribe`](Rig::subscribe) channel.
+    async fn enable_transceive(&self) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "transceive mode not supported".into(),
+        ))
+    }
+
+    /// Disable transceive (AI) mode.
+    async fn disable_transceive(&self) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "transceive mode not supported".into(),
+        ))
+    }
+
     /// Subscribe to real-time rig events.
     ///
     /// Returns a broadcast receiver. The channel is bounded; if the consumer

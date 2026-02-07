@@ -468,10 +468,103 @@ impl Rig for FlexRadio {
         Ok(())
     }
 
+    async fn get_agc(&self, rx: ReceiverId) -> Result<AgcMode> {
+        self.ensure_slice(rx).await?;
+        let state = self.client.state().await;
+        let index = rx.index();
+        let slice = state
+            .slices
+            .get(&index)
+            .ok_or_else(|| Error::InvalidParameter(format!("slice {} does not exist", index)))?;
+
+        if slice.agc_mode.is_empty() {
+            return Err(Error::Protocol("slice AGC mode not yet known".into()));
+        }
+
+        slice
+            .agc_mode
+            .parse::<AgcMode>()
+            .map_err(|_| Error::Protocol(format!("unknown AGC mode: {:?}", slice.agc_mode)))
+    }
+
+    async fn set_agc(&self, rx: ReceiverId, mode: AgcMode) -> Result<()> {
+        self.ensure_slice(rx).await?;
+        let mode_str = match mode {
+            AgcMode::Off => "off",
+            AgcMode::Fast => "fast",
+            AgcMode::Medium => "med",
+            AgcMode::Slow => "slow",
+        };
+        let cmd = codec::cmd_slice_set_agc_mode(rx.index(), mode_str);
+        self.client.send_command(&cmd).await?;
+        Ok(())
+    }
+
+    async fn get_rit(&self) -> Result<(bool, i32)> {
+        let rx = self.primary_receiver().await?;
+        self.ensure_slice(rx).await?;
+        let state = self.client.state().await;
+        let index = rx.index();
+        let slice = state
+            .slices
+            .get(&index)
+            .ok_or_else(|| Error::InvalidParameter(format!("slice {} does not exist", index)))?;
+        Ok((slice.rit_on, slice.rit_freq_hz))
+    }
+
+    async fn set_rit(&self, enabled: bool, offset_hz: i32) -> Result<()> {
+        let rx = self.primary_receiver().await?;
+        self.ensure_slice(rx).await?;
+        let index = rx.index();
+        let cmd_on = codec::cmd_slice_set_rit_on(index, enabled);
+        self.client.send_command(&cmd_on).await?;
+        let cmd_freq = codec::cmd_slice_set_rit_freq(index, offset_hz);
+        self.client.send_command(&cmd_freq).await?;
+        Ok(())
+    }
+
+    async fn get_xit(&self) -> Result<(bool, i32)> {
+        let rx = self.primary_receiver().await?;
+        self.ensure_slice(rx).await?;
+        let state = self.client.state().await;
+        let index = rx.index();
+        let slice = state
+            .slices
+            .get(&index)
+            .ok_or_else(|| Error::InvalidParameter(format!("slice {} does not exist", index)))?;
+        Ok((slice.xit_on, slice.xit_freq_hz))
+    }
+
+    async fn set_xit(&self, enabled: bool, offset_hz: i32) -> Result<()> {
+        let rx = self.primary_receiver().await?;
+        self.ensure_slice(rx).await?;
+        let index = rx.index();
+        let cmd_on = codec::cmd_slice_set_xit_on(index, enabled);
+        self.client.send_command(&cmd_on).await?;
+        let cmd_freq = codec::cmd_slice_set_xit_freq(index, offset_hz);
+        self.client.send_command(&cmd_freq).await?;
+        Ok(())
+    }
+
     async fn set_cw_key(&self, _on: bool) -> Result<()> {
         Err(Error::Unsupported(
             "CW key line control not supported on FlexRadio (network-only transport)".into(),
         ))
+    }
+
+    async fn send_cw_message(&self, message: &str) -> Result<()> {
+        if message.is_empty() {
+            return Ok(());
+        }
+        let cmd = codec::cmd_cwx_send(message);
+        self.client.send_command(&cmd).await?;
+        Ok(())
+    }
+
+    async fn stop_cw_message(&self) -> Result<()> {
+        let cmd = codec::cmd_cwx_clear();
+        self.client.send_command(&cmd).await?;
+        Ok(())
     }
 
     fn subscribe(&self) -> Result<broadcast::Receiver<RigEvent>> {
@@ -979,6 +1072,393 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // AGC
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_agc() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // Send slice 0 status with agc_mode.
+            stream
+                .write_all(b"S12345678|slice 0 RF_frequency=14.250000 mode=USB agc_mode=fast\n")
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let agc = rig.get_agc(ReceiverId::from_index(0)).await.unwrap();
+        assert_eq!(agc, AgcMode::Fast);
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_get_agc_med() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            stream
+                .write_all(b"S12345678|slice 0 RF_frequency=14.250000 mode=USB agc_mode=med\n")
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let agc = rig.get_agc(ReceiverId::from_index(0)).await.unwrap();
+        assert_eq!(agc, AgcMode::Medium);
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_get_agc_not_yet_known() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // Slice exists but no agc_mode field sent.
+            stream
+                .write_all(b"S12345678|slice 0 RF_frequency=14.250000 mode=USB\n")
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let result = rig.get_agc(ReceiverId::from_index(0)).await;
+        assert!(result.is_err());
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_set_agc() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // Send slice 0 status so the slice exists.
+            stream
+                .write_all(b"S12345678|slice 0 RF_frequency=14.250000 mode=USB agc_mode=off\n")
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            // Read the set_agc command.
+            expect_command_and_respond(&mut stream, "slice set 0 agc_mode=slow", "").await;
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        rig.set_agc(ReceiverId::from_index(0), AgcMode::Slow)
+            .await
+            .unwrap();
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_set_agc_medium_sends_med() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            stream
+                .write_all(b"S12345678|slice 0 RF_frequency=14.250000 mode=USB agc_mode=off\n")
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            // Medium should map to "med" in SmartSDR.
+            expect_command_and_respond(&mut stream, "slice set 0 agc_mode=med", "").await;
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        rig.set_agc(ReceiverId::from_index(0), AgcMode::Medium)
+            .await
+            .unwrap();
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    // -----------------------------------------------------------------------
+    // RIT
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_rit() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // Send slice 0 status with RIT enabled and offset.
+            stream
+                .write_all(
+                    b"S12345678|slice 0 RF_frequency=14.250000 mode=USB tx=1 active=1 rit_on=1 rit_freq=150\n",
+                )
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let (enabled, offset) = rig.get_rit().await.unwrap();
+        assert!(enabled);
+        assert_eq!(offset, 150);
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_get_rit_disabled() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            stream
+                .write_all(
+                    b"S12345678|slice 0 RF_frequency=14.250000 mode=USB tx=1 active=1 rit_on=0 rit_freq=0\n",
+                )
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let (enabled, offset) = rig.get_rit().await.unwrap();
+        assert!(!enabled);
+        assert_eq!(offset, 0);
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_set_rit() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // Send slice 0 status so the slice exists.
+            stream
+                .write_all(
+                    b"S12345678|slice 0 RF_frequency=14.250000 mode=USB tx=1 active=1\n",
+                )
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            // Expect the two RIT commands.
+            expect_command_and_respond(&mut stream, "slice set 0 rit_on=1", "").await;
+            expect_command_and_respond(&mut stream, "slice set 0 rit_freq=250", "").await;
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        rig.set_rit(true, 250).await.unwrap();
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_set_rit_disable() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            stream
+                .write_all(
+                    b"S12345678|slice 0 RF_frequency=14.250000 mode=USB tx=1 active=1\n",
+                )
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            expect_command_and_respond(&mut stream, "slice set 0 rit_on=0", "").await;
+            expect_command_and_respond(&mut stream, "slice set 0 rit_freq=0", "").await;
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        rig.set_rit(false, 0).await.unwrap();
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    // -----------------------------------------------------------------------
+    // XIT
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_xit() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            stream
+                .write_all(
+                    b"S12345678|slice 0 RF_frequency=14.250000 mode=USB tx=1 active=1 xit_on=1 xit_freq=500\n",
+                )
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let (enabled, offset) = rig.get_xit().await.unwrap();
+        assert!(enabled);
+        assert_eq!(offset, 500);
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_set_xit() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            stream
+                .write_all(
+                    b"S12345678|slice 0 RF_frequency=14.250000 mode=USB tx=1 active=1\n",
+                )
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            expect_command_and_respond(&mut stream, "slice set 0 xit_on=1", "").await;
+            expect_command_and_respond(&mut stream, "slice set 0 xit_freq=500", "").await;
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        rig.set_xit(true, 500).await.unwrap();
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    // -----------------------------------------------------------------------
     // Create / Destroy Slice
     // -----------------------------------------------------------------------
 
@@ -1447,6 +1927,75 @@ mod tests {
                 // will return None.
             }
         }
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    // -----------------------------------------------------------------------
+    // CW Messages (CWX)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_send_cw_message() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // Read the cwx send command.
+            expect_command_and_respond(&mut stream, "cwx send", "").await;
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        rig.send_cw_message("CQ TEST").await.unwrap();
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_send_cw_message_empty() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let _stream = accept_and_handshake(&listener).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        // Empty message should return Ok without sending a command.
+        rig.send_cw_message("").await.unwrap();
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_stop_cw_message() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // Read the cwx clear command.
+            expect_command_and_respond(&mut stream, "cwx clear", "").await;
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let client = connect_client(&addr).await;
+        let rig = make_flex_radio(client);
+
+        rig.stop_cw_message().await.unwrap();
 
         rig.disconnect().await.unwrap();
         server.abort();

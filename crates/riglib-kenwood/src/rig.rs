@@ -29,7 +29,7 @@ use riglib_core::types::*;
 use riglib_core::audio::{AudioCapable, AudioReceiver, AudioSender, AudioStreamConfig};
 
 use crate::commands;
-use crate::models::KenwoodModel;
+use crate::models::{AgcCommandStyle, KenwoodModel};
 use crate::protocol::{self, DecodeResult};
 
 /// A connected Kenwood transceiver controlled over CAT.
@@ -471,6 +471,390 @@ impl Rig for KenwoodRig {
                 transport.set_rts(on).await
             }
         }
+    }
+
+    async fn get_cw_speed(&self) -> Result<u8> {
+        let cmd = commands::cmd_read_cw_speed();
+        debug!("reading CW speed");
+        let (_, data) = self.execute_command(&cmd).await?;
+        let wpm = commands::parse_cw_speed_response(&data)?;
+        let _ = self.event_tx.send(RigEvent::CwSpeedChanged { wpm });
+        Ok(wpm)
+    }
+
+    async fn set_cw_speed(&self, wpm: u8) -> Result<()> {
+        let cmd = commands::cmd_set_cw_speed(wpm);
+        debug!(wpm, "setting CW speed");
+        self.execute_set_command(&cmd).await?;
+        let _ = self.event_tx.send(RigEvent::CwSpeedChanged { wpm });
+        Ok(())
+    }
+
+    async fn get_agc(&self, rx: ReceiverId) -> Result<AgcMode> {
+        debug!(receiver = %rx, "reading AGC mode");
+        let mode = match self.model.agc_command_style {
+            AgcCommandStyle::GcSimple => {
+                let cmd = commands::cmd_read_agc_mode();
+                let (_, data) = self.execute_command(&cmd).await?;
+                let raw = commands::parse_agc_mode_response(&data)?;
+                // TS-890S GC: 0=Off, 1=Slow, 2=Medium, 3=Fast
+                match raw {
+                    0 => AgcMode::Off,
+                    1 => AgcMode::Slow,
+                    2 => AgcMode::Medium,
+                    3 => AgcMode::Fast,
+                    other => {
+                        return Err(Error::Protocol(format!(
+                            "unknown Kenwood AGC mode value: {other}"
+                        )))
+                    }
+                }
+            }
+            AgcCommandStyle::GcVfo => {
+                let vfo = rx.index();
+                let cmd = commands::cmd_read_agc_mode_vfo(vfo);
+                let (_, data) = self.execute_command(&cmd).await?;
+                let (_vfo, raw) = commands::parse_agc_mode_vfo_response(&data)?;
+                // TS-990S GC: same mapping as TS-890S
+                match raw {
+                    0 => AgcMode::Off,
+                    1 => AgcMode::Slow,
+                    2 => AgcMode::Medium,
+                    3 => AgcMode::Fast,
+                    other => {
+                        return Err(Error::Protocol(format!(
+                            "unknown Kenwood AGC mode value: {other}"
+                        )))
+                    }
+                }
+            }
+            AgcCommandStyle::GtTimeConstant => {
+                let cmd = commands::cmd_read_agc_time_constant();
+                let (_, data) = self.execute_command(&cmd).await?;
+                let tc = commands::parse_agc_time_constant_response(&data)?;
+                // TS-590S/SG GT: 0=Off, 5=Fast, 10=Medium, 20=Slow
+                match tc {
+                    0 => AgcMode::Off,
+                    5 => AgcMode::Fast,
+                    10 => AgcMode::Medium,
+                    20 => AgcMode::Slow,
+                    other => {
+                        return Err(Error::Protocol(format!(
+                            "unknown Kenwood AGC time constant: {other}"
+                        )))
+                    }
+                }
+            }
+        };
+        let _ = self
+            .event_tx
+            .send(RigEvent::AgcChanged { receiver: rx, mode });
+        Ok(mode)
+    }
+
+    async fn set_agc(&self, rx: ReceiverId, mode: AgcMode) -> Result<()> {
+        debug!(receiver = %rx, ?mode, "setting AGC mode");
+        match self.model.agc_command_style {
+            AgcCommandStyle::GcSimple => {
+                // TS-890S GC: 0=Off, 1=Slow, 2=Medium, 3=Fast
+                let value = match mode {
+                    AgcMode::Off => 0,
+                    AgcMode::Slow => 1,
+                    AgcMode::Medium => 2,
+                    AgcMode::Fast => 3,
+                };
+                let cmd = commands::cmd_set_agc_mode(value);
+                self.execute_set_command(&cmd).await?;
+            }
+            AgcCommandStyle::GcVfo => {
+                let vfo = rx.index();
+                let value = match mode {
+                    AgcMode::Off => 0,
+                    AgcMode::Slow => 1,
+                    AgcMode::Medium => 2,
+                    AgcMode::Fast => 3,
+                };
+                let cmd = commands::cmd_set_agc_mode_vfo(vfo, value);
+                self.execute_set_command(&cmd).await?;
+            }
+            AgcCommandStyle::GtTimeConstant => {
+                // TS-590S/SG GT: 0=Off, 5=Fast, 10=Medium, 20=Slow
+                let tc = match mode {
+                    AgcMode::Off => 0,
+                    AgcMode::Fast => 5,
+                    AgcMode::Medium => 10,
+                    AgcMode::Slow => 20,
+                };
+                let cmd = commands::cmd_set_agc_time_constant(tc);
+                self.execute_set_command(&cmd).await?;
+            }
+        }
+        let _ = self
+            .event_tx
+            .send(RigEvent::AgcChanged { receiver: rx, mode });
+        Ok(())
+    }
+
+    async fn get_preamp(&self, rx: ReceiverId) -> Result<PreampLevel> {
+        debug!(receiver = %rx, "reading preamp level");
+        let cmd = commands::cmd_read_preamp();
+        let (_prefix, data) = self.execute_command(&cmd).await?;
+        let raw = commands::parse_preamp_response(&data)?;
+        let level = match raw {
+            0 => PreampLevel::Off,
+            1 => PreampLevel::Preamp1,
+            2 => PreampLevel::Preamp2,
+            other => {
+                return Err(Error::Protocol(format!(
+                    "unknown Kenwood preamp level: {other}"
+                )))
+            }
+        };
+        let _ = self
+            .event_tx
+            .send(RigEvent::PreampChanged { receiver: rx, level });
+        Ok(level)
+    }
+
+    async fn set_preamp(&self, rx: ReceiverId, level: PreampLevel) -> Result<()> {
+        // Gate Preamp2 on models that only support Preamp1.
+        if level == PreampLevel::Preamp2 && !self.model.has_preamp2 {
+            return Err(Error::Unsupported(format!(
+                "{} does not support Preamp 2",
+                self.model.name
+            )));
+        }
+
+        let value = match level {
+            PreampLevel::Off => 0,
+            PreampLevel::Preamp1 => 1,
+            PreampLevel::Preamp2 => 2,
+        };
+        let cmd = commands::cmd_set_preamp(value);
+        debug!(receiver = %rx, ?level, "setting preamp");
+        self.execute_set_command(&cmd).await?;
+        let _ = self
+            .event_tx
+            .send(RigEvent::PreampChanged { receiver: rx, level });
+        Ok(())
+    }
+
+    async fn get_attenuator(&self, rx: ReceiverId) -> Result<AttenuatorLevel> {
+        debug!(receiver = %rx, "reading attenuator level");
+        let cmd = commands::cmd_read_attenuator();
+        let (_prefix, data) = self.execute_command(&cmd).await?;
+        let raw = commands::parse_attenuator_response(&data)?;
+        let level = match raw {
+            0 => AttenuatorLevel::Off,
+            6 => AttenuatorLevel::Db6,
+            12 => AttenuatorLevel::Db12,
+            18 => AttenuatorLevel::Db18,
+            other => {
+                return Err(Error::Protocol(format!(
+                    "unknown Kenwood attenuator level: {other}"
+                )))
+            }
+        };
+        let _ = self.event_tx.send(RigEvent::AttenuatorChanged {
+            receiver: rx,
+            level,
+        });
+        Ok(level)
+    }
+
+    async fn set_attenuator(&self, rx: ReceiverId, level: AttenuatorLevel) -> Result<()> {
+        let value = match level {
+            AttenuatorLevel::Off => 0,
+            AttenuatorLevel::Db6 => 6,
+            AttenuatorLevel::Db12 => 12,
+            AttenuatorLevel::Db18 => 18,
+        };
+        let cmd = commands::cmd_set_attenuator(value);
+        debug!(receiver = %rx, ?level, "setting attenuator");
+        self.execute_set_command(&cmd).await?;
+        let _ = self.event_tx.send(RigEvent::AttenuatorChanged {
+            receiver: rx,
+            level,
+        });
+        Ok(())
+    }
+
+    async fn get_rit(&self) -> Result<(bool, i32)> {
+        debug!("reading RIT state");
+        let cmd = commands::cmd_read_rit();
+        let (_, data) = self.execute_command(&cmd).await?;
+        let enabled = commands::parse_rit_response(&data)?;
+
+        let offset_cmd = commands::cmd_read_rit_xit_offset();
+        let (_, offset_data) = self.execute_command(&offset_cmd).await?;
+        let offset_hz = commands::parse_rit_xit_offset_response(&offset_data)?;
+
+        let _ = self
+            .event_tx
+            .send(RigEvent::RitChanged { enabled, offset_hz });
+        Ok((enabled, offset_hz))
+    }
+
+    async fn set_rit(&self, enabled: bool, offset_hz: i32) -> Result<()> {
+        debug!(enabled, offset_hz, "setting RIT");
+        let cmd = commands::cmd_set_rit_on(enabled);
+        self.execute_set_command(&cmd).await?;
+
+        let clear_cmd = commands::cmd_rit_clear();
+        self.execute_set_command(&clear_cmd).await?;
+
+        if offset_hz != 0 {
+            let steps = offset_hz.unsigned_abs() / self.model.rit_step_hz as u32;
+            if offset_hz > 0 {
+                let up_cmd = commands::cmd_rit_up();
+                for _ in 0..steps {
+                    self.execute_set_command(&up_cmd).await?;
+                }
+            } else {
+                let down_cmd = commands::cmd_rit_down();
+                for _ in 0..steps {
+                    self.execute_set_command(&down_cmd).await?;
+                }
+            }
+        }
+
+        let _ = self
+            .event_tx
+            .send(RigEvent::RitChanged { enabled, offset_hz });
+        Ok(())
+    }
+
+    async fn get_xit(&self) -> Result<(bool, i32)> {
+        debug!("reading XIT state");
+        let cmd = commands::cmd_read_xit();
+        let (_, data) = self.execute_command(&cmd).await?;
+        let enabled = commands::parse_xit_response(&data)?;
+
+        let offset_cmd = commands::cmd_read_rit_xit_offset();
+        let (_, offset_data) = self.execute_command(&offset_cmd).await?;
+        let offset_hz = commands::parse_rit_xit_offset_response(&offset_data)?;
+
+        let _ = self
+            .event_tx
+            .send(RigEvent::XitChanged { enabled, offset_hz });
+        Ok((enabled, offset_hz))
+    }
+
+    async fn set_xit(&self, enabled: bool, offset_hz: i32) -> Result<()> {
+        debug!(enabled, offset_hz, "setting XIT");
+        let cmd = commands::cmd_set_xit_on(enabled);
+        self.execute_set_command(&cmd).await?;
+
+        let clear_cmd = commands::cmd_rit_clear();
+        self.execute_set_command(&clear_cmd).await?;
+
+        if offset_hz != 0 {
+            let steps = offset_hz.unsigned_abs() / self.model.rit_step_hz as u32;
+            if offset_hz > 0 {
+                let up_cmd = commands::cmd_rit_up();
+                for _ in 0..steps {
+                    self.execute_set_command(&up_cmd).await?;
+                }
+            } else {
+                let down_cmd = commands::cmd_rit_down();
+                for _ in 0..steps {
+                    self.execute_set_command(&down_cmd).await?;
+                }
+            }
+        }
+
+        let _ = self
+            .event_tx
+            .send(RigEvent::XitChanged { enabled, offset_hz });
+        Ok(())
+    }
+
+    async fn set_vfo_a_eq_b(&self, _receiver: ReceiverId) -> Result<()> {
+        let cmd = commands::cmd_vfo_a_eq_b();
+        debug!("setting VFO A=B");
+        self.execute_set_command(&cmd).await
+    }
+
+    async fn swap_vfo(&self, _receiver: ReceiverId) -> Result<()> {
+        Err(Error::Unsupported(
+            "Kenwood does not support VFO swap".into(),
+        ))
+    }
+
+    async fn get_antenna(&self, _receiver: ReceiverId) -> Result<AntennaPort> {
+        let cmd = commands::cmd_read_antenna();
+        debug!("reading antenna port");
+        let (_, data) = self.execute_command(&cmd).await?;
+        let ant = commands::parse_antenna_response(&data)?;
+        let port = match ant {
+            1 => AntennaPort::Ant1,
+            2 => AntennaPort::Ant2,
+            3 => AntennaPort::Ant3,
+            4 => AntennaPort::Ant4,
+            other => {
+                return Err(Error::Protocol(format!(
+                    "unknown antenna port number: {other}"
+                )));
+            }
+        };
+        Ok(port)
+    }
+
+    async fn set_antenna(&self, _receiver: ReceiverId, port: AntennaPort) -> Result<()> {
+        let ant = match port {
+            AntennaPort::Ant1 => 1,
+            AntennaPort::Ant2 => 2,
+            AntennaPort::Ant3 => 3,
+            AntennaPort::Ant4 => 4,
+        };
+        let cmd = commands::cmd_set_antenna(ant);
+        debug!(%port, "setting antenna port");
+        self.execute_set_command(&cmd).await
+    }
+
+    async fn send_cw_message(&self, message: &str) -> Result<()> {
+        if message.is_empty() {
+            return Ok(());
+        }
+
+        // Split the message into chunks of at most 24 characters.
+        let chars: Vec<char> = message.chars().collect();
+        let chunks: Vec<String> = chars.chunks(24).map(|c| c.iter().collect()).collect();
+
+        debug!(message_len = message.len(), num_chunks = chunks.len(), "sending CW message");
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            // Poll the buffer status before sending each chunk.
+            const MAX_BUFFER_RETRIES: u32 = 50;
+            for retry in 0..MAX_BUFFER_RETRIES {
+                let buf_cmd = commands::cmd_read_cw_buffer();
+                let (_prefix, data) = self.execute_command(&buf_cmd).await?;
+                let buffer_ready = commands::parse_cw_buffer_response(&data)?;
+
+                if buffer_ready {
+                    break;
+                }
+
+                if retry == MAX_BUFFER_RETRIES - 1 {
+                    return Err(Error::Timeout);
+                }
+
+                debug!(retry, "CW buffer full, waiting");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            let send_cmd = commands::cmd_send_cw_message(chunk);
+            debug!(chunk_index = i, chunk = %chunk, "sending CW chunk");
+            self.execute_set_command(&send_cmd).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn stop_cw_message(&self) -> Result<()> {
+        let cmd = commands::cmd_stop_cw_message();
+        debug!("stopping CW message");
+        self.execute_set_command(&cmd).await
     }
 
     fn subscribe(&self) -> Result<broadcast::Receiver<RigEvent>> {
@@ -1061,6 +1445,905 @@ mod tests {
             }
             other => panic!("expected SplitChanged, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------
+    // CW speed
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_cw_speed() {
+        let mut mock = MockTransport::new();
+
+        let read_cmd = commands::cmd_read_cw_speed();
+        let response = b"KS025;".to_vec();
+        mock.expect(&read_cmd, &response);
+
+        let rig = make_test_rig(mock);
+        let wpm = rig.get_cw_speed().await.unwrap();
+        assert_eq!(wpm, 25);
+    }
+
+    #[tokio::test]
+    async fn test_set_cw_speed() {
+        let mut mock = MockTransport::new();
+
+        let set_cmd = commands::cmd_set_cw_speed(25);
+        let response = b"KS025;".to_vec();
+        mock.expect(&set_cmd, &response);
+
+        let rig = make_test_rig(mock);
+        rig.set_cw_speed(25).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_events_emitted_on_set_cw_speed() {
+        let mut mock = MockTransport::new();
+
+        let set_cmd = commands::cmd_set_cw_speed(30);
+        let response = b"KS030;".to_vec();
+        mock.expect(&set_cmd, &response);
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        rig.set_cw_speed(30).await.unwrap();
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::CwSpeedChanged { wpm } => {
+                assert_eq!(wpm, 30);
+            }
+            other => panic!("expected CwSpeedChanged, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // AGC — TS-890S (GcSimple)
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_agc_890_fast() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_agc_mode();
+        mock.expect(&cmd, b"GC3;");
+
+        let rig = make_test_rig(mock);
+        let mode = rig.get_agc(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(mode, AgcMode::Fast);
+    }
+
+    #[tokio::test]
+    async fn test_get_agc_890_off() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_agc_mode();
+        mock.expect(&cmd, b"GC0;");
+
+        let rig = make_test_rig(mock);
+        let mode = rig.get_agc(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(mode, AgcMode::Off);
+    }
+
+    #[tokio::test]
+    async fn test_set_agc_890_slow() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_agc_mode(1);
+        mock.expect(&cmd, b"GC1;");
+
+        let rig = make_test_rig(mock);
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Slow)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_agc_890_fast() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_agc_mode(3);
+        mock.expect(&cmd, b"GC3;");
+
+        let rig = make_test_rig(mock);
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Fast)
+            .await
+            .unwrap();
+    }
+
+    // -----------------------------------------------------------------
+    // AGC — TS-990S (GcVfo)
+    // -----------------------------------------------------------------
+
+    fn make_ts990_rig(mock: MockTransport) -> KenwoodRig {
+        use crate::models::ts_990s;
+        KenwoodRig::new(
+            Box::new(mock),
+            ts_990s(),
+            true,
+            3,
+            Duration::from_millis(500),
+            PttMethod::Cat,
+            KeyLine::None,
+            #[cfg(feature = "audio")]
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_get_agc_990_main_fast() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_agc_mode_vfo(0);
+        // Response: GC03; → vfo=0, mode=3 (Fast)
+        mock.expect(&cmd, b"GC03;");
+
+        let rig = make_ts990_rig(mock);
+        let mode = rig.get_agc(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(mode, AgcMode::Fast);
+    }
+
+    #[tokio::test]
+    async fn test_get_agc_990_sub_slow() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_agc_mode_vfo(1);
+        // Response: GC11; → vfo=1, mode=1 (Slow)
+        mock.expect(&cmd, b"GC11;");
+
+        let rig = make_ts990_rig(mock);
+        let mode = rig.get_agc(ReceiverId::VFO_B).await.unwrap();
+        assert_eq!(mode, AgcMode::Slow);
+    }
+
+    #[tokio::test]
+    async fn test_set_agc_990_sub_medium() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_agc_mode_vfo(1, 2);
+        mock.expect(&cmd, b"GC12;");
+
+        let rig = make_ts990_rig(mock);
+        rig.set_agc(ReceiverId::VFO_B, AgcMode::Medium)
+            .await
+            .unwrap();
+    }
+
+    // -----------------------------------------------------------------
+    // AGC — TS-590S (GtTimeConstant)
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_agc_590_fast() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_agc_time_constant();
+        mock.expect(&cmd, b"GT005;");
+
+        let rig = make_single_rx_rig(mock);
+        let mode = rig.get_agc(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(mode, AgcMode::Fast);
+    }
+
+    #[tokio::test]
+    async fn test_get_agc_590_off() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_agc_time_constant();
+        mock.expect(&cmd, b"GT000;");
+
+        let rig = make_single_rx_rig(mock);
+        let mode = rig.get_agc(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(mode, AgcMode::Off);
+    }
+
+    #[tokio::test]
+    async fn test_get_agc_590_slow() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_agc_time_constant();
+        mock.expect(&cmd, b"GT020;");
+
+        let rig = make_single_rx_rig(mock);
+        let mode = rig.get_agc(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(mode, AgcMode::Slow);
+    }
+
+    #[tokio::test]
+    async fn test_set_agc_590_slow() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_agc_time_constant(20);
+        mock.expect(&cmd, b"GT020;");
+
+        let rig = make_single_rx_rig(mock);
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Slow)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_agc_590_off() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_agc_time_constant(0);
+        mock.expect(&cmd, b"GT000;");
+
+        let rig = make_single_rx_rig(mock);
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Off)
+            .await
+            .unwrap();
+    }
+
+    // -----------------------------------------------------------------
+    // AGC events
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_agc_emits_event() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_agc_mode(3);
+        mock.expect(&cmd, b"GC3;");
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Fast)
+            .await
+            .unwrap();
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::AgcChanged { receiver, mode } => {
+                assert_eq!(receiver, ReceiverId::VFO_A);
+                assert_eq!(mode, AgcMode::Fast);
+            }
+            other => panic!("expected AgcChanged, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Preamp — TS-890S (GcSimple, has_preamp2 = false)
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_preamp_off() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_preamp();
+        mock.expect(&cmd, b"PA0;");
+
+        let rig = make_test_rig(mock);
+        let level = rig.get_preamp(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(level, PreampLevel::Off);
+    }
+
+    #[tokio::test]
+    async fn test_get_preamp_1() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_preamp();
+        mock.expect(&cmd, b"PA1;");
+
+        let rig = make_test_rig(mock);
+        let level = rig.get_preamp(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(level, PreampLevel::Preamp1);
+    }
+
+    #[tokio::test]
+    async fn test_get_preamp_2() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_preamp();
+        mock.expect(&cmd, b"PA2;");
+
+        // Use TS-990S which supports Preamp2
+        let rig = make_ts990_rig(mock);
+        let level = rig.get_preamp(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(level, PreampLevel::Preamp2);
+    }
+
+    #[tokio::test]
+    async fn test_set_preamp_off() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_preamp(0);
+        mock.expect(&cmd, b"PA0;");
+
+        let rig = make_test_rig(mock);
+        rig.set_preamp(ReceiverId::VFO_A, PreampLevel::Off)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_preamp_1() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_preamp(1);
+        mock.expect(&cmd, b"PA1;");
+
+        let rig = make_test_rig(mock);
+        rig.set_preamp(ReceiverId::VFO_A, PreampLevel::Preamp1)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_preamp_2_on_990() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_preamp(2);
+        mock.expect(&cmd, b"PA2;");
+
+        // TS-990S has_preamp2 = true, so this should succeed
+        let rig = make_ts990_rig(mock);
+        rig.set_preamp(ReceiverId::VFO_A, PreampLevel::Preamp2)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_preamp_2_on_890_returns_unsupported() {
+        // TS-890S has_preamp2 = false
+        let mock = MockTransport::new();
+        let rig = make_test_rig(mock);
+        let result = rig
+            .set_preamp(ReceiverId::VFO_A, PreampLevel::Preamp2)
+            .await;
+        match result {
+            Err(Error::Unsupported(msg)) => {
+                assert!(msg.contains("does not support Preamp 2"));
+            }
+            Err(other) => panic!("expected Unsupported error, got: {other:?}"),
+            Ok(()) => panic!("expected error, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_preamp_2_on_590_returns_unsupported() {
+        // TS-590S has_preamp2 = false
+        let mock = MockTransport::new();
+        let rig = make_single_rx_rig(mock);
+        let result = rig
+            .set_preamp(ReceiverId::VFO_A, PreampLevel::Preamp2)
+            .await;
+        match result {
+            Err(Error::Unsupported(msg)) => {
+                assert!(msg.contains("does not support Preamp 2"));
+            }
+            Err(other) => panic!("expected Unsupported error, got: {other:?}"),
+            Ok(()) => panic!("expected error, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_preamp_emits_event_on_get() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_preamp();
+        mock.expect(&cmd, b"PA1;");
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        let level = rig.get_preamp(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(level, PreampLevel::Preamp1);
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::PreampChanged { receiver, level } => {
+                assert_eq!(receiver, ReceiverId::VFO_A);
+                assert_eq!(level, PreampLevel::Preamp1);
+            }
+            other => panic!("expected PreampChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_preamp_emits_event_on_set() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_preamp(1);
+        mock.expect(&cmd, b"PA1;");
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        rig.set_preamp(ReceiverId::VFO_A, PreampLevel::Preamp1)
+            .await
+            .unwrap();
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::PreampChanged { receiver, level } => {
+                assert_eq!(receiver, ReceiverId::VFO_A);
+                assert_eq!(level, PreampLevel::Preamp1);
+            }
+            other => panic!("expected PreampChanged, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Attenuator
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_attenuator_off() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_attenuator();
+        mock.expect(&cmd, b"RA00;");
+
+        let rig = make_test_rig(mock);
+        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(level, AttenuatorLevel::Off);
+    }
+
+    #[tokio::test]
+    async fn test_get_attenuator_6db() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_attenuator();
+        mock.expect(&cmd, b"RA06;");
+
+        let rig = make_test_rig(mock);
+        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(level, AttenuatorLevel::Db6);
+    }
+
+    #[tokio::test]
+    async fn test_get_attenuator_12db() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_attenuator();
+        mock.expect(&cmd, b"RA12;");
+
+        let rig = make_test_rig(mock);
+        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(level, AttenuatorLevel::Db12);
+    }
+
+    #[tokio::test]
+    async fn test_get_attenuator_18db() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_attenuator();
+        mock.expect(&cmd, b"RA18;");
+
+        let rig = make_test_rig(mock);
+        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(level, AttenuatorLevel::Db18);
+    }
+
+    #[tokio::test]
+    async fn test_get_attenuator_unknown_value_returns_error() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_attenuator();
+        // Value 09 is not a valid attenuator level
+        mock.expect(&cmd, b"RA09;");
+
+        let rig = make_test_rig(mock);
+        let result = rig.get_attenuator(ReceiverId::VFO_A).await;
+        assert!(result.is_err());
+        match result {
+            Err(Error::Protocol(msg)) => {
+                assert!(msg.contains("unknown Kenwood attenuator level"));
+            }
+            Err(other) => panic!("expected Protocol error, got: {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_attenuator_off() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_attenuator(0);
+        mock.expect(&cmd, b"RA00;");
+
+        let rig = make_test_rig(mock);
+        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Off)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_attenuator_6db() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_attenuator(6);
+        mock.expect(&cmd, b"RA06;");
+
+        let rig = make_test_rig(mock);
+        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db6)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_attenuator_12db() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_attenuator(12);
+        mock.expect(&cmd, b"RA12;");
+
+        let rig = make_test_rig(mock);
+        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db12)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_attenuator_18db() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_attenuator(18);
+        mock.expect(&cmd, b"RA18;");
+
+        let rig = make_test_rig(mock);
+        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db18)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_attenuator_emits_event_on_get() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_read_attenuator();
+        mock.expect(&cmd, b"RA12;");
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(level, AttenuatorLevel::Db12);
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::AttenuatorChanged { receiver, level } => {
+                assert_eq!(receiver, ReceiverId::VFO_A);
+                assert_eq!(level, AttenuatorLevel::Db12);
+            }
+            other => panic!("expected AttenuatorChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_attenuator_emits_event_on_set() {
+        let mut mock = MockTransport::new();
+        let cmd = commands::cmd_set_attenuator(18);
+        mock.expect(&cmd, b"RA18;");
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db18)
+            .await
+            .unwrap();
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::AttenuatorChanged { receiver, level } => {
+                assert_eq!(receiver, ReceiverId::VFO_A);
+                assert_eq!(level, AttenuatorLevel::Db18);
+            }
+            other => panic!("expected AttenuatorChanged, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // RIT
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_rit() {
+        let mut mock = MockTransport::new();
+
+        // First command: read RIT on/off
+        let rit_cmd = commands::cmd_read_rit();
+        mock.expect(&rit_cmd, b"RT1;");
+
+        // Second command: read RIT/XIT offset
+        let offset_cmd = commands::cmd_read_rit_xit_offset();
+        mock.expect(&offset_cmd, b"RO+00050;");
+
+        let rig = make_test_rig(mock);
+        let (enabled, offset) = rig.get_rit().await.unwrap();
+        assert!(enabled);
+        assert_eq!(offset, 50);
+    }
+
+    #[tokio::test]
+    async fn test_get_rit_off() {
+        let mut mock = MockTransport::new();
+
+        let rit_cmd = commands::cmd_read_rit();
+        mock.expect(&rit_cmd, b"RT0;");
+
+        let offset_cmd = commands::cmd_read_rit_xit_offset();
+        mock.expect(&offset_cmd, b"RO+00000;");
+
+        let rig = make_test_rig(mock);
+        let (enabled, offset) = rig.get_rit().await.unwrap();
+        assert!(!enabled);
+        assert_eq!(offset, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_rit_negative() {
+        let mut mock = MockTransport::new();
+
+        let rit_cmd = commands::cmd_read_rit();
+        mock.expect(&rit_cmd, b"RT1;");
+
+        let offset_cmd = commands::cmd_read_rit_xit_offset();
+        mock.expect(&offset_cmd, b"RO-00120;");
+
+        let rig = make_test_rig(mock);
+        let (enabled, offset) = rig.get_rit().await.unwrap();
+        assert!(enabled);
+        assert_eq!(offset, -120);
+    }
+
+    #[tokio::test]
+    async fn test_set_rit() {
+        // TS-890S has rit_step_hz=1, so offset +3 means 3 x RU;
+        let mut mock = MockTransport::new();
+
+        // 1. Set RIT on
+        let rit_on_cmd = commands::cmd_set_rit_on(true);
+        mock.expect(&rit_on_cmd, b"RT1;");
+
+        // 2. Clear offset
+        let clear_cmd = commands::cmd_rit_clear();
+        mock.expect(&clear_cmd, b"RC;");
+
+        // 3. Three RU; commands for +3 Hz
+        let up_cmd = commands::cmd_rit_up();
+        mock.expect(&up_cmd, b"RU;");
+        mock.expect(&up_cmd, b"RU;");
+        mock.expect(&up_cmd, b"RU;");
+
+        let rig = make_test_rig(mock);
+        rig.set_rit(true, 3).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_rit_disable() {
+        let mut mock = MockTransport::new();
+
+        // 1. Set RIT off
+        let rit_off_cmd = commands::cmd_set_rit_on(false);
+        mock.expect(&rit_off_cmd, b"RT0;");
+
+        // 2. Clear offset
+        let clear_cmd = commands::cmd_rit_clear();
+        mock.expect(&clear_cmd, b"RC;");
+
+        // No RU/RD commands since offset is 0
+        let rig = make_test_rig(mock);
+        rig.set_rit(false, 0).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_rit_negative() {
+        // TS-890S has rit_step_hz=1, so offset -3 means 3 x RD;
+        let mut mock = MockTransport::new();
+
+        // 1. Set RIT on
+        let rit_on_cmd = commands::cmd_set_rit_on(true);
+        mock.expect(&rit_on_cmd, b"RT1;");
+
+        // 2. Clear offset
+        let clear_cmd = commands::cmd_rit_clear();
+        mock.expect(&clear_cmd, b"RC;");
+
+        // 3. Three RD; commands for -3 Hz
+        let down_cmd = commands::cmd_rit_down();
+        mock.expect(&down_cmd, b"RD;");
+        mock.expect(&down_cmd, b"RD;");
+        mock.expect(&down_cmd, b"RD;");
+
+        let rig = make_test_rig(mock);
+        rig.set_rit(true, -3).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_rit_emits_event() {
+        let mut mock = MockTransport::new();
+
+        // set_rit(true, 0) — enable with zero offset
+        let rit_on_cmd = commands::cmd_set_rit_on(true);
+        mock.expect(&rit_on_cmd, b"RT1;");
+
+        let clear_cmd = commands::cmd_rit_clear();
+        mock.expect(&clear_cmd, b"RC;");
+
+        let rig = make_test_rig(mock);
+        let mut event_rx = rig.subscribe().unwrap();
+
+        rig.set_rit(true, 0).await.unwrap();
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::RitChanged { enabled, offset_hz } => {
+                assert!(enabled);
+                assert_eq!(offset_hz, 0);
+            }
+            other => panic!("expected RitChanged, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // XIT
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_xit() {
+        let mut mock = MockTransport::new();
+
+        let xit_cmd = commands::cmd_read_xit();
+        mock.expect(&xit_cmd, b"XT1;");
+
+        let offset_cmd = commands::cmd_read_rit_xit_offset();
+        mock.expect(&offset_cmd, b"RO+00100;");
+
+        let rig = make_test_rig(mock);
+        let (enabled, offset) = rig.get_xit().await.unwrap();
+        assert!(enabled);
+        assert_eq!(offset, 100);
+    }
+
+    #[tokio::test]
+    async fn test_set_xit() {
+        // TS-890S has rit_step_hz=1, so offset +2 means 2 x RU;
+        let mut mock = MockTransport::new();
+
+        // 1. Set XIT on
+        let xit_on_cmd = commands::cmd_set_xit_on(true);
+        mock.expect(&xit_on_cmd, b"XT1;");
+
+        // 2. Clear offset
+        let clear_cmd = commands::cmd_rit_clear();
+        mock.expect(&clear_cmd, b"RC;");
+
+        // 3. Two RU; commands for +2 Hz
+        let up_cmd = commands::cmd_rit_up();
+        mock.expect(&up_cmd, b"RU;");
+        mock.expect(&up_cmd, b"RU;");
+
+        let rig = make_test_rig(mock);
+        rig.set_xit(true, 2).await.unwrap();
+    }
+
+    // -----------------------------------------------------------------
+    // VFO A=B
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_set_vfo_a_eq_b() {
+        let mut mock = MockTransport::new();
+
+        let cmd = commands::cmd_vfo_a_eq_b();
+        let response = b"AB;".to_vec();
+        mock.expect(&cmd, &response);
+
+        let rig = make_test_rig(mock);
+        rig.set_vfo_a_eq_b(ReceiverId::VFO_A).await.unwrap();
+    }
+
+    // -----------------------------------------------------------------
+    // swap_vfo (unsupported)
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_swap_vfo_unsupported() {
+        let mock = MockTransport::new();
+        let rig = make_test_rig(mock);
+        let result = rig.swap_vfo(ReceiverId::VFO_A).await;
+        match result {
+            Err(Error::Unsupported(msg)) => {
+                assert!(msg.contains("Kenwood does not support VFO swap"));
+            }
+            Err(other) => panic!("expected Unsupported error, got: {other:?}"),
+            Ok(()) => panic!("expected error, got Ok"),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Antenna
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_antenna() {
+        let mut mock = MockTransport::new();
+
+        let read_cmd = commands::cmd_read_antenna();
+        let response = b"AN1;".to_vec();
+        mock.expect(&read_cmd, &response);
+
+        let rig = make_test_rig(mock);
+        let port = rig.get_antenna(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(port, AntennaPort::Ant1);
+    }
+
+    #[tokio::test]
+    async fn test_get_antenna_2() {
+        let mut mock = MockTransport::new();
+
+        let read_cmd = commands::cmd_read_antenna();
+        let response = b"AN2;".to_vec();
+        mock.expect(&read_cmd, &response);
+
+        let rig = make_test_rig(mock);
+        let port = rig.get_antenna(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(port, AntennaPort::Ant2);
+    }
+
+    #[tokio::test]
+    async fn test_set_antenna() {
+        let mut mock = MockTransport::new();
+
+        let set_cmd = commands::cmd_set_antenna(1);
+        let response = b"AN1;".to_vec();
+        mock.expect(&set_cmd, &response);
+
+        let rig = make_test_rig(mock);
+        rig.set_antenna(ReceiverId::VFO_A, AntennaPort::Ant1)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_set_antenna_2() {
+        let mut mock = MockTransport::new();
+
+        let set_cmd = commands::cmd_set_antenna(2);
+        let response = b"AN2;".to_vec();
+        mock.expect(&set_cmd, &response);
+
+        let rig = make_test_rig(mock);
+        rig.set_antenna(ReceiverId::VFO_A, AntennaPort::Ant2)
+            .await
+            .unwrap();
+    }
+
+    // -----------------------------------------------------------------
+    // CW messages
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_send_cw_message() {
+        let mut mock = MockTransport::new();
+
+        // Buffer query: KY0; means buffer ready
+        let buf_cmd = commands::cmd_read_cw_buffer();
+        mock.expect(&buf_cmd, b"KY0;");
+
+        // Send command: Kenwood echoes back the command
+        let send_cmd = commands::cmd_send_cw_message("CQ DE W1AW");
+        mock.expect(&send_cmd, &send_cmd);
+
+        let rig = make_test_rig(mock);
+        rig.send_cw_message("CQ DE W1AW").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_send_cw_message_chunked() {
+        let mut mock = MockTransport::new();
+
+        // Message longer than 24 chars forces two chunks.
+        let message = "CQ CQ CQ DE W1AW W1AW W1AW K";
+        let chars: Vec<char> = message.chars().collect();
+        let chunk1: String = chars[..24].iter().collect();
+        let chunk2: String = chars[24..].iter().collect();
+
+        // Chunk 1: buffer query + send
+        let buf_cmd = commands::cmd_read_cw_buffer();
+        mock.expect(&buf_cmd, b"KY0;");
+        let send_cmd1 = commands::cmd_send_cw_message(&chunk1);
+        mock.expect(&send_cmd1, &send_cmd1);
+
+        // Chunk 2: buffer query + send
+        let buf_cmd2 = commands::cmd_read_cw_buffer();
+        mock.expect(&buf_cmd2, b"KY0;");
+        let send_cmd2 = commands::cmd_send_cw_message(&chunk2);
+        mock.expect(&send_cmd2, &send_cmd2);
+
+        let rig = make_test_rig(mock);
+        rig.send_cw_message(message).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_stop_cw_message() {
+        let mut mock = MockTransport::new();
+
+        let cmd = commands::cmd_stop_cw_message();
+        mock.expect(&cmd, &cmd);
+
+        let rig = make_test_rig(mock);
+        rig.stop_cw_message().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_send_cw_message_empty() {
+        let mock = MockTransport::new();
+        let rig = make_test_rig(mock);
+        rig.send_cw_message("").await.unwrap();
     }
 
     // -----------------------------------------------------------------

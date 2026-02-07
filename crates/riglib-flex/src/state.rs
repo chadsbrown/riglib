@@ -48,6 +48,16 @@ pub struct SliceState {
     pub is_tx: bool,
     /// Whether this slice is the active (focused) slice.
     pub active: bool,
+    /// AGC mode string (e.g. "off", "slow", "med", "fast").
+    pub agc_mode: String,
+    /// Whether RIT is enabled.
+    pub rit_on: bool,
+    /// RIT frequency offset in Hz.
+    pub rit_freq_hz: i32,
+    /// Whether XIT is enabled.
+    pub xit_on: bool,
+    /// XIT frequency offset in Hz.
+    pub xit_freq_hz: i32,
 }
 
 /// Transmit state.
@@ -83,6 +93,10 @@ mod tests {
         assert_eq!(slice.filter_hi, 0);
         assert!(!slice.is_tx);
         assert!(!slice.active);
+        assert!(!slice.rit_on);
+        assert_eq!(slice.rit_freq_hz, 0);
+        assert!(!slice.xit_on);
+        assert_eq!(slice.xit_freq_hz, 0);
     }
 
     #[test]
@@ -103,6 +117,8 @@ mod tests {
             filter_hi: 2900,
             is_tx: true,
             active: true,
+            agc_mode: String::new(),
+            ..SliceState::default()
         };
         state.slices.insert(0, slice);
 

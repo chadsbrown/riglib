@@ -22,6 +22,7 @@ use riglib_core::ReceiverId;
 use riglib_core::audio::AudioBuffer;
 use riglib_core::error::{Error, Result};
 use riglib_core::events::RigEvent;
+use riglib_core::types::AgcMode;
 
 use crate::codec::{self, SmartSdrMessage, SmartSdrResponse, SmartSdrVersion, mhz_to_hz};
 use crate::mode;
@@ -629,6 +630,18 @@ async fn process_status(
                     }
                 }
 
+                if let Some(ref agc_str) = ss.agc_mode {
+                    if slice.agc_mode != *agc_str {
+                        slice.agc_mode = agc_str.clone();
+                        if let Ok(mode) = agc_str.parse::<AgcMode>() {
+                            let _ = event_tx.send(RigEvent::AgcChanged {
+                                receiver: ReceiverId::from_index(ss.index),
+                                mode,
+                            });
+                        }
+                    }
+                }
+
                 if let Some(lo) = ss.filter_lo {
                     slice.filter_lo = lo;
                 }
@@ -640,6 +653,45 @@ async fn process_status(
                 }
                 if let Some(active) = ss.active {
                     slice.active = active;
+                }
+
+                if let Some(rit_on) = ss.rit_on {
+                    if slice.rit_on != rit_on {
+                        slice.rit_on = rit_on;
+                        let offset = ss.rit_freq.unwrap_or(slice.rit_freq_hz);
+                        let _ = event_tx.send(RigEvent::RitChanged {
+                            enabled: rit_on,
+                            offset_hz: offset,
+                        });
+                    }
+                }
+                if let Some(rit_freq) = ss.rit_freq {
+                    if slice.rit_freq_hz != rit_freq {
+                        slice.rit_freq_hz = rit_freq;
+                        let _ = event_tx.send(RigEvent::RitChanged {
+                            enabled: ss.rit_on.unwrap_or(slice.rit_on),
+                            offset_hz: rit_freq,
+                        });
+                    }
+                }
+                if let Some(xit_on) = ss.xit_on {
+                    if slice.xit_on != xit_on {
+                        slice.xit_on = xit_on;
+                        let offset = ss.xit_freq.unwrap_or(slice.xit_freq_hz);
+                        let _ = event_tx.send(RigEvent::XitChanged {
+                            enabled: xit_on,
+                            offset_hz: offset,
+                        });
+                    }
+                }
+                if let Some(xit_freq) = ss.xit_freq {
+                    if slice.xit_freq_hz != xit_freq {
+                        slice.xit_freq_hz = xit_freq;
+                        let _ = event_tx.send(RigEvent::XitChanged {
+                            enabled: ss.xit_on.unwrap_or(slice.xit_on),
+                            offset_hz: xit_freq,
+                        });
+                    }
                 }
             }
             Err(e) => {
@@ -1111,6 +1163,121 @@ mod tests {
         let result = client.send_command("info").await;
         assert!(matches!(result, Err(Error::NotConnected)));
 
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_agc_status_updates_state_and_emits_event() {
+        let (listener, addr) = mock_smartsdr_server().await;
+        let parts: Vec<&str> = addr.split(':').collect();
+        let host = parts[0];
+        let port: u16 = parts[1].parse().unwrap();
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // Send slice 0 with agc_mode.
+            stream
+                .write_all(b"S12345678|slice 0 RF_frequency=14.250000 mode=USB agc_mode=slow\n")
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        let options = ClientOptions {
+            auto_subscribe: false,
+            ..ClientOptions::default()
+        };
+        let client = SmartSdrClient::connect_with_options(host, port, options)
+            .await
+            .unwrap();
+
+        let mut rx = client.subscribe();
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Verify state was updated.
+        let state = client.state().await;
+        let slice = state.slices.get(&0).expect("slice 0 should exist");
+        assert_eq!(slice.agc_mode, "slow");
+
+        // Verify AgcChanged event was emitted.
+        let mut found_agc_change = false;
+        while let Ok(event) = rx.try_recv() {
+            if let RigEvent::AgcChanged { receiver, mode } = event {
+                assert_eq!(receiver, ReceiverId::from_index(0));
+                assert_eq!(mode, AgcMode::Slow);
+                found_agc_change = true;
+            }
+        }
+        assert!(found_agc_change, "expected AgcChanged event");
+
+        client.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_rit_status_updates_state_and_emits_event() {
+        let (listener, addr) = mock_smartsdr_server().await;
+        let parts: Vec<&str> = addr.split(':').collect();
+        let host = parts[0];
+        let port: u16 = parts[1].parse().unwrap();
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // Send slice 0 with RIT enabled and offset.
+            stream
+                .write_all(
+                    b"S12345678|slice 0 RF_frequency=14.250000 mode=USB rit_on=1 rit_freq=150\n",
+                )
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        let options = ClientOptions {
+            auto_subscribe: false,
+            ..ClientOptions::default()
+        };
+        let client = SmartSdrClient::connect_with_options(host, port, options)
+            .await
+            .unwrap();
+
+        let mut rx = client.subscribe();
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Verify state was updated.
+        let state = client.state().await;
+        let slice = state.slices.get(&0).expect("slice 0 should exist");
+        assert!(slice.rit_on);
+        assert_eq!(slice.rit_freq_hz, 150);
+
+        // Verify RitChanged event was emitted.
+        let mut found_rit_change = false;
+        while let Ok(event) = rx.try_recv() {
+            if let RigEvent::RitChanged {
+                enabled,
+                offset_hz,
+            } = event
+            {
+                assert!(enabled);
+                assert_eq!(offset_hz, 150);
+                found_rit_change = true;
+            }
+        }
+        assert!(found_rit_change, "expected RitChanged event");
+
+        client.disconnect().await.unwrap();
         server.abort();
     }
 
