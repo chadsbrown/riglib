@@ -922,6 +922,17 @@ impl Rig for ElecraftRig {
         self.execute_set_command(&cmd).await
     }
 
+    async fn enable_transceive(&self) -> Result<()> {
+        self.enable_ai_mode().await;
+        Ok(())
+    }
+
+    async fn disable_transceive(&self) -> Result<()> {
+        Err(Error::Unsupported(
+            "disable_transceive not yet implemented for Elecraft".into(),
+        ))
+    }
+
     fn subscribe(&self) -> Result<broadcast::Receiver<RigEvent>> {
         Ok(self.event_tx.subscribe())
     }

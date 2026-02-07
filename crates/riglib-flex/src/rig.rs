@@ -567,6 +567,18 @@ impl Rig for FlexRadio {
         Ok(())
     }
 
+    async fn enable_transceive(&self) -> Result<()> {
+        // FlexRadio SmartSDR pushes state changes continuously over TCP;
+        // transceive is always on. Nothing to do here.
+        Ok(())
+    }
+
+    async fn disable_transceive(&self) -> Result<()> {
+        Err(Error::Unsupported(
+            "disable_transceive not yet implemented for FlexRadio".into(),
+        ))
+    }
+
     fn subscribe(&self) -> Result<broadcast::Receiver<RigEvent>> {
         Ok(self.client.subscribe())
     }

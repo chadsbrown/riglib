@@ -107,7 +107,7 @@ impl IcomRig {
     ///
     /// This should be called once after construction, before issuing
     /// commands, when the rig has CI-V Transceive enabled.
-    pub async fn enable_transceive(&self) {
+    pub async fn start_transceive(&self) {
         let mut handle_guard = self.transceive_handle.lock().await;
         if handle_guard.is_some() {
             debug!("transceive already enabled");
@@ -1096,6 +1096,17 @@ impl Rig for IcomRig {
         let cmd = commands::cmd_stop_cw_message(self.civ_address);
         debug!("stopping CW message");
         self.execute_ack_command(&cmd).await
+    }
+
+    async fn enable_transceive(&self) -> Result<()> {
+        self.start_transceive().await;
+        Ok(())
+    }
+
+    async fn disable_transceive(&self) -> Result<()> {
+        Err(Error::Unsupported(
+            "disable_transceive not yet implemented for Icom".into(),
+        ))
     }
 
     fn subscribe(&self) -> Result<broadcast::Receiver<RigEvent>> {

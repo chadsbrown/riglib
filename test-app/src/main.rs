@@ -766,7 +766,7 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
 
                 // Enable CI-V transceive listener so the `monitor` command
                 // receives unsolicited frequency/mode broadcasts from the rig.
-                rig.enable_transceive().await;
+                rig.enable_transceive().await?;
 
                 println!(
                     "Connected to {port} at {baud} baud -- Icom {} (transceive enabled)",

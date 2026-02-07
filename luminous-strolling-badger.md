@@ -1130,7 +1130,7 @@ Need to add AI command first (not in commands.rs yet).
 
 ---
 
-## Phase 12a: Transceive Trait — enable_transceive() Wiring
+## Phase 12a: Transceive Trait — enable_transceive() Wiring — ✅ DONE
 
 Wire each backend's existing `enable_transceive()` / `enable_ai_mode()` inherent method
 to the `Rig` trait's `enable_transceive()` method (already defined with default
