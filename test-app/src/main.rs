@@ -38,7 +38,7 @@ use riglib::kenwood::builder::KenwoodBuilder;
 use riglib::kenwood::models as kenwood_models;
 use riglib::yaesu::builder::YaesuBuilder;
 use riglib::yaesu::models as yaesu_models;
-use riglib::{AudioCapable, Mode, ReceiverId, Rig};
+use riglib::{AudioCapable, KeyLine, Mode, PttMethod, ReceiverId, Rig};
 use riglib_test_harness::MockTransport;
 use riglib_transport::SerialTransport;
 use riglib_transport::audio::list_audio_devices;
@@ -100,6 +100,18 @@ struct Cli {
     #[arg(long)]
     device: Option<String>,
 
+    /// PTT method: cat (default), dtr, or rts.
+    /// When set to dtr or rts, PTT is controlled via the serial control line
+    /// instead of a CAT command. Not valid for FlexRadio.
+    #[arg(long, default_value = "cat", value_enum)]
+    ptt_method: PttMethodArg,
+
+    /// CW key line: none (default), dtr, or rts.
+    /// When set, the `key on` / `key off` commands toggle the serial control
+    /// line for hardware CW keying. Not valid for FlexRadio.
+    #[arg(long, default_value = "none", value_enum)]
+    key_line: KeyLineArg,
+
     /// Use a mock transport instead of a real serial port.
     /// Useful for verifying CLI parsing and builder wiring without hardware.
     /// Not supported for FlexRadio (network-only).
@@ -157,6 +169,12 @@ enum Command {
     Split {
         #[command(subcommand)]
         action: SplitAction,
+    },
+
+    /// CW key line operations (requires --key-line dtr or --key-line rts).
+    Key {
+        #[command(subcommand)]
+        action: KeyAction,
     },
 
     /// Subscribe to rig events and print them in real time.
@@ -302,6 +320,14 @@ enum SplitAction {
     Off,
 }
 
+#[derive(Subcommand)]
+enum KeyAction {
+    /// Assert the CW key line (key down).
+    On,
+    /// De-assert the CW key line (key up).
+    Off,
+}
+
 #[derive(Clone, Debug, ValueEnum)]
 enum MeterType {
     S,
@@ -310,15 +336,43 @@ enum MeterType {
     Power,
 }
 
+#[derive(Clone, Debug, ValueEnum)]
+enum PttMethodArg {
+    Cat,
+    Dtr,
+    Rts,
+}
+
+impl From<PttMethodArg> for PttMethod {
+    fn from(arg: PttMethodArg) -> Self {
+        match arg {
+            PttMethodArg::Cat => PttMethod::Cat,
+            PttMethodArg::Dtr => PttMethod::Dtr,
+            PttMethodArg::Rts => PttMethod::Rts,
+        }
+    }
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum KeyLineArg {
+    None,
+    Dtr,
+    Rts,
+}
+
+impl From<KeyLineArg> for KeyLine {
+    fn from(arg: KeyLineArg) -> Self {
+        match arg {
+            KeyLineArg::None => KeyLine::None,
+            KeyLineArg::Dtr => KeyLine::Dtr,
+            KeyLineArg::Rts => KeyLine::Rts,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Format a frequency in Hz as a human-readable MHz string.
-fn format_freq(hz: u64) -> String {
-    let mhz = hz as f64 / 1_000_000.0;
-    format!("{mhz:.6} MHz")
-}
 
 /// Convert a receiver index argument to a ReceiverId.
 fn receiver_id(rx: u8) -> ReceiverId {
@@ -338,15 +392,14 @@ fn confirm(prompt: &str) -> bool {
 
 /// Check if the given manufacturer string refers to FlexRadio.
 fn is_flex_manufacturer(mfr: &str) -> bool {
-    mfr.to_lowercase() == "flex"
+    mfr.parse::<riglib::Manufacturer>()
+        .is_ok_and(|m| m.default_connection() == riglib::ConnectionType::Network)
 }
 
 /// Check if the given manufacturer string refers to a serial-port manufacturer.
 fn is_serial_manufacturer(mfr: &str) -> bool {
-    matches!(
-        mfr.to_lowercase().as_str(),
-        "icom" | "yaesu" | "kenwood" | "elecraft"
-    )
+    mfr.parse::<riglib::Manufacturer>()
+        .is_ok_and(|m| m.default_connection() == riglib::ConnectionType::Serial)
 }
 
 // ---------------------------------------------------------------------------
@@ -501,26 +554,17 @@ fn summarize_freq_ranges(ranges: &[riglib::BandRange]) -> String {
 
 fn cmd_list(filter_mfr: Option<&str>) -> Result<()> {
     // Validate the filter if provided.
-    if let Some(mfr) = filter_mfr {
-        let mfr_lower = mfr.to_lowercase();
-        if !["icom", "yaesu", "kenwood", "elecraft", "flex"].contains(&mfr_lower.as_str()) {
-            bail!(
-                "unknown manufacturer '{}'. Supported: icom, yaesu, kenwood, elecraft, flex",
-                mfr
-            );
-        }
-    }
+    let filter: Option<riglib::Manufacturer> = match filter_mfr {
+        Some(mfr) => Some(
+            mfr.parse()
+                .map_err(|e: riglib::ParseManufacturerError| anyhow::anyhow!("{e}"))?,
+        ),
+        None => None,
+    };
 
-    let filter = filter_mfr.map(|s| s.to_lowercase());
     let entries: Vec<_> = riglib::supported_rigs()
         .into_iter()
-        .filter(|r| {
-            filter.as_deref().is_none_or(|f| {
-                let mfr = r.manufacturer.to_string().to_lowercase();
-                // Accept "flex" as shorthand for "flexradio".
-                mfr == f || (f == "flex" && mfr == "flexradio")
-            })
-        })
+        .filter(|r| filter.is_none_or(|f| r.manufacturer == f))
         .collect();
 
     if entries.is_empty() {
@@ -672,10 +716,15 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
 
     let mfr = manufacturer.to_lowercase();
 
+    let ptt_method: PttMethod = cli.ptt_method.clone().into();
+    let key_line: KeyLine = cli.key_line.clone().into();
+
     match mfr.as_str() {
         "icom" => {
             let model = lookup_icom_model(model_name)?;
-            let mut builder = IcomBuilder::new(model.clone());
+            let mut builder = IcomBuilder::new(model.clone())
+                .ptt_method(ptt_method)
+                .key_line(key_line);
 
             if let Some(baud) = cli.baud {
                 builder = builder.baud_rate(baud);
@@ -732,7 +781,9 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
             }
 
             let model = lookup_yaesu_model(model_name)?;
-            let mut builder = YaesuBuilder::new(model.clone());
+            let mut builder = YaesuBuilder::new(model.clone())
+                .ptt_method(ptt_method)
+                .key_line(key_line);
 
             if let Some(baud) = cli.baud {
                 builder = builder.baud_rate(baud);
@@ -743,7 +794,9 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
 
             if cli.mock {
                 let mock = MockTransport::new();
-                let rig = builder.build_with_transport(Box::new(mock));
+                let rig = builder
+                    .build_with_transport(Box::new(mock))
+                    .context("failed to build YaesuRig with mock transport")?;
                 println!("Connected (mock transport) -- Yaesu {}", model.name);
                 Ok(Box::new(rig))
             } else {
@@ -759,7 +812,9 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
 
                 builder = builder.serial_port(port);
 
-                let rig = builder.build_with_transport(Box::new(transport));
+                let rig = builder
+                    .build_with_transport(Box::new(transport))
+                    .context("failed to build YaesuRig")?;
 
                 println!("Connected to {port} at {baud} baud -- Yaesu {}", model.name);
                 Ok(Box::new(rig))
@@ -771,7 +826,9 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
             }
 
             let model = lookup_kenwood_model(model_name)?;
-            let mut builder = KenwoodBuilder::new(model.clone());
+            let mut builder = KenwoodBuilder::new(model.clone())
+                .ptt_method(ptt_method)
+                .key_line(key_line);
 
             if let Some(baud) = cli.baud {
                 builder = builder.baud_rate(baud);
@@ -819,7 +876,9 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
             }
 
             let model = lookup_elecraft_model(model_name)?;
-            let mut builder = ElecraftBuilder::new(model.clone());
+            let mut builder = ElecraftBuilder::new(model.clone())
+                .ptt_method(ptt_method)
+                .key_line(key_line);
 
             if let Some(baud) = cli.baud {
                 builder = builder.baud_rate(baud);
@@ -984,7 +1043,11 @@ async fn cmd_info(rig: &dyn Rig) -> Result<()> {
         "  Freq ranges:    {}",
         caps.frequency_ranges
             .iter()
-            .map(|r| format!("{} - {}", format_freq(r.low_hz), format_freq(r.high_hz)))
+            .map(|r| format!(
+                "{} - {}",
+                riglib::format_freq_mhz(r.low_hz),
+                riglib::format_freq_mhz(r.high_hz)
+            ))
             .collect::<Vec<_>>()
             .join("; ")
     );
@@ -994,14 +1057,14 @@ async fn cmd_info(rig: &dyn Rig) -> Result<()> {
 async fn cmd_freq_get(rig: &dyn Rig, rx: u8) -> Result<()> {
     let rid = receiver_id(rx);
     let freq = rig.get_frequency(rid).await?;
-    println!("{rid}: {}", format_freq(freq));
+    println!("{rid}: {}", riglib::format_freq_mhz(freq));
     Ok(())
 }
 
 async fn cmd_freq_set(rig: &dyn Rig, rx: u8, freq_hz: u64) -> Result<()> {
     let rid = receiver_id(rx);
     rig.set_frequency(rid, freq_hz).await?;
-    println!("{rid}: set to {}", format_freq(freq_hz));
+    println!("{rid}: set to {}", riglib::format_freq_mhz(freq_hz));
     Ok(())
 }
 
@@ -1055,16 +1118,7 @@ async fn cmd_meter(rig: &dyn Rig, meter_type: &MeterType, rx: u8) -> Result<()> 
         MeterType::S => {
             let rid = receiver_id(rx);
             let dbm = rig.get_s_meter(rid).await?;
-            // Convert dBm to approximate S-units for display.
-            let s_unit = if dbm <= -127.0 {
-                "S0".to_string()
-            } else if dbm <= -73.0 {
-                let s = ((dbm + 127.0) / 6.0).round() as i32;
-                format!("S{s}")
-            } else {
-                let over = (dbm + 73.0).round() as i32;
-                format!("S9+{over} dB")
-            };
+            let s_unit = riglib::s_units_from_dbm(dbm);
             println!("{rid} S-meter: {dbm:.1} dBm ({s_unit})");
         }
         MeterType::Swr => {
@@ -1103,6 +1157,18 @@ async fn cmd_split_set(rig: &dyn Rig, on: bool) -> Result<()> {
     Ok(())
 }
 
+async fn cmd_key_on(rig: &dyn Rig) -> Result<()> {
+    rig.set_cw_key(true).await?;
+    println!("CW Key: ON (key down)");
+    Ok(())
+}
+
+async fn cmd_key_off(rig: &dyn Rig) -> Result<()> {
+    rig.set_cw_key(false).await?;
+    println!("CW Key: OFF (key up)");
+    Ok(())
+}
+
 async fn cmd_monitor(rig: &dyn Rig, duration_secs: u64) -> Result<()> {
     let mut event_rx = rig.subscribe()?;
 
@@ -1130,7 +1196,7 @@ async fn cmd_monitor(rig: &dyn Rig, duration_secs: u64) -> Result<()> {
         match tokio::time::timeout(timeout, event_rx.recv()).await {
             Ok(Ok(event)) => match &event {
                 riglib::RigEvent::FrequencyChanged { receiver, freq_hz } => {
-                    println!("[freq]  {receiver}: {}", format_freq(*freq_hz));
+                    println!("[freq]  {receiver}: {}", riglib::format_freq_mhz(*freq_hz));
                 }
                 riglib::RigEvent::ModeChanged { receiver, mode } => {
                     println!("[mode]  {receiver}: {mode}");
@@ -1180,7 +1246,7 @@ async fn cmd_stress(rig: &dyn Rig, count: u32, rx: u8) -> Result<()> {
     // Read the current frequency as our baseline.
     let base_freq = rig.get_frequency(rid).await?;
     println!("Stress test: {count} cycles on {rid}");
-    println!("Base frequency: {}", format_freq(base_freq));
+    println!("Base frequency: {}", riglib::format_freq_mhz(base_freq));
 
     let mut rng = rand::thread_rng();
     let mut success = 0u32;
@@ -1207,8 +1273,8 @@ async fn cmd_stress(rig: &dyn Rig, count: u32, rx: u8) -> Result<()> {
                 } else {
                     eprintln!(
                         "[{i}/{count}] mismatch: set {} but read back {}",
-                        format_freq(target),
-                        format_freq(readback)
+                        riglib::format_freq_mhz(target),
+                        riglib::format_freq_mhz(readback)
                     );
                     failures += 1;
                 }
@@ -1239,7 +1305,7 @@ async fn cmd_stress(rig: &dyn Rig, count: u32, rx: u8) -> Result<()> {
     if let Err(e) = rig.set_frequency(rid, base_freq).await {
         eprintln!("Warning: failed to restore base frequency: {e}");
     } else {
-        println!("  Restored:       {}", format_freq(base_freq));
+        println!("  Restored:       {}", riglib::format_freq_mhz(base_freq));
     }
 
     if failures > 0 {
@@ -1325,7 +1391,7 @@ async fn cmd_slices(rig: &FlexRadio) -> Result<()> {
         println!(
             "  {:>3}    {:>16}  {:<8}  {}",
             rx.index(),
-            format_freq(freq),
+            riglib::format_freq_mhz(freq),
             mode_str,
             tx_marker,
         );
@@ -1348,7 +1414,7 @@ async fn cmd_create_slice(rig: &FlexRadio, freq_hz: u64, mode_str: &str) -> Resu
     println!(
         "Created slice {} at {} ({})",
         rx.index(),
-        format_freq(freq_hz),
+        riglib::format_freq_mhz(freq_hz),
         mode
     );
     Ok(())
@@ -1730,6 +1796,10 @@ async fn main() -> Result<()> {
             SplitAction::Get => cmd_split_get(rig.as_ref()).await,
             SplitAction::On => cmd_split_set(rig.as_ref(), true).await,
             SplitAction::Off => cmd_split_set(rig.as_ref(), false).await,
+        },
+        Command::Key { action } => match action {
+            KeyAction::On => cmd_key_on(rig.as_ref()).await,
+            KeyAction::Off => cmd_key_off(rig.as_ref()).await,
         },
         Command::Monitor { duration } => cmd_monitor(rig.as_ref(), *duration).await,
         Command::Stress { count, rx } => cmd_stress(rig.as_ref(), *count, *rx).await,

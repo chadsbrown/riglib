@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use riglib_core::error::{Error, Result};
 use riglib_core::transport::Transport;
+use riglib_core::types::{KeyLine, PttMethod};
 
 use crate::models::ElecraftModel;
 use crate::rig::ElecraftRig;
@@ -48,6 +49,8 @@ pub struct ElecraftBuilder {
     auto_retry: bool,
     max_retries: u32,
     command_timeout: Duration,
+    ptt_method: PttMethod,
+    key_line: KeyLine,
     /// USB audio device name for audio streaming (e.g. "USB Audio CODEC").
     #[cfg(feature = "audio")]
     audio_device_name: Option<String>,
@@ -63,6 +66,8 @@ impl ElecraftBuilder {
             auto_retry: true,
             max_retries: 3,
             command_timeout: Duration::from_millis(500),
+            ptt_method: PttMethod::Cat,
+            key_line: KeyLine::None,
             #[cfg(feature = "audio")]
             audio_device_name: None,
         }
@@ -99,6 +104,18 @@ impl ElecraftBuilder {
         self
     }
 
+    /// Set the PTT method: CAT command (default), DTR line, or RTS line.
+    pub fn ptt_method(mut self, method: PttMethod) -> Self {
+        self.ptt_method = method;
+        self
+    }
+
+    /// Set the CW key line: None (default), DTR, or RTS.
+    pub fn key_line(mut self, line: KeyLine) -> Self {
+        self.key_line = line;
+        self
+    }
+
     /// Set the USB audio device name for audio streaming.
     ///
     /// The name should match a device reported by
@@ -120,12 +137,26 @@ impl ElecraftBuilder {
     /// advanced use cases where the caller manages the transport
     /// lifecycle directly.
     pub async fn build_with_transport(self, transport: Box<dyn Transport>) -> Result<ElecraftRig> {
+        // Validate that ptt_method and key_line don't use the same serial line.
+        if self.ptt_method == PttMethod::Dtr && self.key_line == KeyLine::Dtr {
+            return Err(Error::InvalidParameter(
+                "ptt_method and key_line cannot both use DTR".into(),
+            ));
+        }
+        if self.ptt_method == PttMethod::Rts && self.key_line == KeyLine::Rts {
+            return Err(Error::InvalidParameter(
+                "ptt_method and key_line cannot both use RTS".into(),
+            ));
+        }
+
         Ok(ElecraftRig::new(
             transport,
             self.model,
             self.auto_retry,
             self.max_retries,
             self.command_timeout,
+            self.ptt_method,
+            self.key_line,
             #[cfg(feature = "audio")]
             self.audio_device_name,
         ))

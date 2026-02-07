@@ -39,10 +39,23 @@ const CMD_TRANSCEIVE_MODE: u8 = 0x01;
 // Types
 // ---------------------------------------------------------------------------
 
-/// A command request sent from `execute_command` to the reader task.
-pub(crate) struct CommandRequest {
-    pub cmd_bytes: Vec<u8>,
-    pub response_tx: oneshot::Sender<Result<CivFrame>>,
+/// A request sent from the rig to the reader task.
+pub(crate) enum CommandRequest {
+    /// A CI-V command to be forwarded to the transport.
+    CivCommand {
+        cmd_bytes: Vec<u8>,
+        response_tx: oneshot::Sender<Result<CivFrame>>,
+    },
+    /// Set the DTR serial line state.
+    SetDtr {
+        on: bool,
+        response_tx: oneshot::Sender<Result<()>>,
+    },
+    /// Set the RTS serial line state.
+    SetRts {
+        on: bool,
+        response_tx: oneshot::Sender<Result<()>>,
+    },
 }
 
 /// Handle to the background transceive reader task.
@@ -166,15 +179,23 @@ async fn reader_loop(
             // Priority: handle outgoing commands.
             cmd = cmd_rx.recv() => {
                 match cmd {
-                    Some(request) => {
+                    Some(CommandRequest::CivCommand { cmd_bytes, response_tx }) => {
                         let result = execute_command_on_transport(
                             &mut *transport,
-                            &request.cmd_bytes,
+                            &cmd_bytes,
                             &config,
                             &event_tx,
                         )
                         .await;
-                        let _ = request.response_tx.send(result);
+                        let _ = response_tx.send(result);
+                    }
+                    Some(CommandRequest::SetDtr { on, response_tx }) => {
+                        let result = transport.set_dtr(on).await;
+                        let _ = response_tx.send(result);
+                    }
+                    Some(CommandRequest::SetRts { on, response_tx }) => {
+                        let result = transport.set_rts(on).await;
+                        let _ = response_tx.send(result);
                     }
                     None => {
                         // All senders dropped -- IcomRig was dropped.

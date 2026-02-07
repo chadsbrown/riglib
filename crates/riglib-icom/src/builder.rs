@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use riglib_core::error::{Error, Result};
 use riglib_core::transport::Transport;
+use riglib_core::types::{KeyLine, PttMethod};
 
 use crate::models::IcomModel;
 use crate::rig::IcomRig;
@@ -56,6 +57,8 @@ pub struct IcomBuilder {
     reconnect_delay: Duration,
     #[allow(dead_code)]
     max_reconnect_attempts: u32,
+    ptt_method: PttMethod,
+    key_line: KeyLine,
     /// USB audio device name for audio streaming (e.g. "USB Audio CODEC").
     #[cfg(feature = "audio")]
     audio_device_name: Option<String>,
@@ -76,6 +79,8 @@ impl IcomBuilder {
             command_timeout: Duration::from_millis(500),
             reconnect_delay: Duration::from_secs(1),
             max_reconnect_attempts: 5,
+            ptt_method: PttMethod::Cat,
+            key_line: KeyLine::None,
             #[cfg(feature = "audio")]
             audio_device_name: None,
         }
@@ -148,6 +153,25 @@ impl IcomBuilder {
         self
     }
 
+    /// Set the PTT method: CAT command (default), DTR line, or RTS line.
+    ///
+    /// When set to `Dtr` or `Rts`, [`set_ptt()`](riglib_core::rig::Rig::set_ptt)
+    /// will toggle the corresponding serial control line instead of sending a
+    /// CI-V PTT command.
+    pub fn ptt_method(mut self, method: PttMethod) -> Self {
+        self.ptt_method = method;
+        self
+    }
+
+    /// Set the CW key line: None (default), DTR, or RTS.
+    ///
+    /// When set, [`set_cw_key()`](riglib_core::rig::Rig::set_cw_key) will
+    /// toggle the corresponding serial control line for hardware CW keying.
+    pub fn key_line(mut self, line: KeyLine) -> Self {
+        self.key_line = line;
+        self
+    }
+
     /// Build an [`IcomRig`] with a caller-provided transport.
     ///
     /// This is the primary entry point for testing (pass a
@@ -155,6 +179,18 @@ impl IcomBuilder {
     /// advanced use cases where the caller manages the transport
     /// lifecycle directly.
     pub async fn build_with_transport(self, transport: Box<dyn Transport>) -> Result<IcomRig> {
+        // Validate that ptt_method and key_line don't use the same serial line.
+        if self.ptt_method == PttMethod::Dtr && self.key_line == KeyLine::Dtr {
+            return Err(Error::InvalidParameter(
+                "ptt_method and key_line cannot both use DTR".into(),
+            ));
+        }
+        if self.ptt_method == PttMethod::Rts && self.key_line == KeyLine::Rts {
+            return Err(Error::InvalidParameter(
+                "ptt_method and key_line cannot both use RTS".into(),
+            ));
+        }
+
         let civ_address = self.civ_address.unwrap_or(self.model.default_civ_address);
 
         Ok(IcomRig::new(
@@ -165,6 +201,8 @@ impl IcomBuilder {
             self.max_retries,
             self.collision_recovery,
             self.command_timeout,
+            self.ptt_method,
+            self.key_line,
             #[cfg(feature = "audio")]
             self.audio_device_name,
         ))

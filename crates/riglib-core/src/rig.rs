@@ -107,6 +107,13 @@ pub trait Rig: Send + Sync {
     /// Set which receiver is used for transmit in split mode.
     async fn set_tx_receiver(&self, rx: ReceiverId) -> Result<()>;
 
+    /// Assert or de-assert the CW key line.
+    ///
+    /// Requires a hardware key line to be configured (see builder's
+    /// `key_line()` method). Returns `Unsupported` if no key line
+    /// is configured or the transport doesn't support it.
+    async fn set_cw_key(&self, on: bool) -> Result<()>;
+
     /// Subscribe to real-time rig events.
     ///
     /// Returns a broadcast receiver. The channel is bounded; if the consumer

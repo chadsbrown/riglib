@@ -44,6 +44,8 @@ pub struct KenwoodRig {
     max_retries: u32,
     command_timeout: Duration,
     info: RigInfo,
+    ptt_method: PttMethod,
+    key_line: KeyLine,
     /// USB audio device name (e.g. "USB Audio CODEC"). When set, this rig
     /// supports audio streaming via the `AudioCapable` trait.
     #[cfg(feature = "audio")]
@@ -59,12 +61,15 @@ impl KenwoodRig {
     ///
     /// This is called by [`KenwoodBuilder`](crate::builder::KenwoodBuilder);
     /// callers should use the builder API instead.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         transport: Box<dyn Transport>,
         model: KenwoodModel,
         auto_retry: bool,
         max_retries: u32,
         command_timeout: Duration,
+        ptt_method: PttMethod,
+        key_line: KeyLine,
         #[cfg(feature = "audio")] audio_device_name: Option<String>,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(256);
@@ -81,6 +86,8 @@ impl KenwoodRig {
             max_retries,
             command_timeout,
             info,
+            ptt_method,
+            key_line,
             #[cfg(feature = "audio")]
             audio_device_name,
             #[cfg(feature = "audio")]
@@ -350,9 +357,23 @@ impl Rig for KenwoodRig {
     }
 
     async fn set_ptt(&self, on: bool) -> Result<()> {
-        let cmd = commands::cmd_set_ptt(on);
-        debug!(on, "setting PTT");
-        self.execute_set_command(&cmd).await?;
+        match self.ptt_method {
+            PttMethod::Cat => {
+                let cmd = commands::cmd_set_ptt(on);
+                debug!(on, "setting PTT via CAT");
+                self.execute_set_command(&cmd).await?;
+            }
+            PttMethod::Dtr => {
+                debug!(on, "setting PTT via DTR");
+                let mut transport = self.transport.lock().await;
+                transport.set_dtr(on).await?;
+            }
+            PttMethod::Rts => {
+                debug!(on, "setting PTT via RTS");
+                let mut transport = self.transport.lock().await;
+                transport.set_rts(on).await?;
+            }
+        }
         let _ = self.event_tx.send(RigEvent::PttChanged { on });
         Ok(())
     }
@@ -434,6 +455,24 @@ impl Rig for KenwoodRig {
         self.execute_set_command(&cmd).await
     }
 
+    async fn set_cw_key(&self, on: bool) -> Result<()> {
+        match self.key_line {
+            KeyLine::None => Err(Error::Unsupported(
+                "no CW key line configured (use builder's key_line() method)".into(),
+            )),
+            KeyLine::Dtr => {
+                debug!(on, "CW key via DTR");
+                let mut transport = self.transport.lock().await;
+                transport.set_dtr(on).await
+            }
+            KeyLine::Rts => {
+                debug!(on, "CW key via RTS");
+                let mut transport = self.transport.lock().await;
+                transport.set_rts(on).await
+            }
+        }
+    }
+
     fn subscribe(&self) -> Result<broadcast::Receiver<RigEvent>> {
         Ok(self.event_tx.subscribe())
     }
@@ -508,6 +547,8 @@ mod tests {
             true, // auto_retry
             3,    // max_retries
             Duration::from_millis(500),
+            PttMethod::Cat,
+            KeyLine::None,
             #[cfg(feature = "audio")]
             None,
         )
@@ -522,6 +563,8 @@ mod tests {
             true,
             3,
             Duration::from_millis(500),
+            PttMethod::Cat,
+            KeyLine::None,
             #[cfg(feature = "audio")]
             None,
         )
@@ -1082,6 +1125,8 @@ mod tests {
                 true,
                 3,
                 Duration::from_millis(500),
+                PttMethod::Cat,
+                KeyLine::None,
                 device_name.map(|s| s.to_string()),
             )
         }

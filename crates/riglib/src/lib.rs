@@ -231,3 +231,33 @@ pub fn supported_rigs() -> Vec<RigDefinition> {
 
     rigs
 }
+
+/// Normalize a model name for case-insensitive, hyphen-insensitive matching.
+///
+/// Strips hyphens and converts to lowercase: `"IC-7610"` → `"ic7610"`.
+fn normalize_model_name(name: &str) -> String {
+    name.to_lowercase().replace('-', "")
+}
+
+/// Find a rig definition by model name, searching across all enabled
+/// manufacturer backends.
+///
+/// The search is case-insensitive and hyphen-insensitive, so `"IC-7610"`,
+/// `"ic7610"`, and `"Ic-7610"` all match the same rig.
+///
+/// Returns `None` if no matching model is found among the enabled backends.
+///
+/// # Example
+///
+/// ```
+/// if let Some(rig) = riglib::find_rig("IC-7610") {
+///     println!("{} {} — {} W",
+///         rig.manufacturer, rig.model_name, rig.capabilities.max_power_watts);
+/// }
+/// ```
+pub fn find_rig(name: &str) -> Option<RigDefinition> {
+    let needle = normalize_model_name(name);
+    supported_rigs()
+        .into_iter()
+        .find(|r| normalize_model_name(r.model_name) == needle)
+}

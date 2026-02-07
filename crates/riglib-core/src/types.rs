@@ -170,6 +170,19 @@ pub enum Manufacturer {
     FlexRadio,
 }
 
+impl Manufacturer {
+    /// Returns the default connection type for this manufacturer.
+    ///
+    /// FlexRadio rigs are network-only (SmartSDR TCP/IP). All other
+    /// manufacturers use serial (USB virtual COM port or RS-232).
+    pub fn default_connection(&self) -> ConnectionType {
+        match self {
+            Manufacturer::FlexRadio => ConnectionType::Network,
+            _ => ConnectionType::Serial,
+        }
+    }
+}
+
 impl fmt::Display for Manufacturer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
@@ -180,6 +193,37 @@ impl fmt::Display for Manufacturer {
             Manufacturer::FlexRadio => "FlexRadio",
         };
         write!(f, "{s}")
+    }
+}
+
+/// Error returned when a string cannot be parsed into a [`Manufacturer`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseManufacturerError(String);
+
+impl fmt::Display for ParseManufacturerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "unknown manufacturer: '{}'. Expected: icom, yaesu, kenwood, elecraft, flex",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for ParseManufacturerError {}
+
+impl FromStr for Manufacturer {
+    type Err = ParseManufacturerError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "icom" => Ok(Manufacturer::Icom),
+            "yaesu" => Ok(Manufacturer::Yaesu),
+            "kenwood" => Ok(Manufacturer::Kenwood),
+            "elecraft" => Ok(Manufacturer::Elecraft),
+            "flex" | "flexradio" => Ok(Manufacturer::FlexRadio),
+            _ => Err(ParseManufacturerError(s.to_string())),
+        }
     }
 }
 
@@ -269,6 +313,30 @@ impl fmt::Display for BandRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}-{} Hz", self.low_hz, self.high_hz)
     }
+}
+
+/// How PTT (push-to-talk) is activated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum PttMethod {
+    /// PTT via CAT command (default, supported by all backends).
+    #[default]
+    Cat,
+    /// PTT via the DTR serial line.
+    Dtr,
+    /// PTT via the RTS serial line.
+    Rts,
+}
+
+/// Which serial line is used for CW keying.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum KeyLine {
+    /// No hardware CW keying (default).
+    #[default]
+    None,
+    /// CW key via the DTR serial line.
+    Dtr,
+    /// CW key via the RTS serial line.
+    Rts,
 }
 
 /// Capabilities and limits of a specific rig model.
@@ -394,5 +462,59 @@ mod tests {
     fn manufacturer_display() {
         assert_eq!(Manufacturer::Icom.to_string(), "Icom");
         assert_eq!(Manufacturer::FlexRadio.to_string(), "FlexRadio");
+    }
+
+    #[test]
+    fn manufacturer_from_str() {
+        assert_eq!("icom".parse::<Manufacturer>().unwrap(), Manufacturer::Icom);
+        assert_eq!(
+            "YAESU".parse::<Manufacturer>().unwrap(),
+            Manufacturer::Yaesu
+        );
+        assert_eq!(
+            "Kenwood".parse::<Manufacturer>().unwrap(),
+            Manufacturer::Kenwood
+        );
+        assert_eq!(
+            "elecraft".parse::<Manufacturer>().unwrap(),
+            Manufacturer::Elecraft
+        );
+        assert_eq!(
+            "flex".parse::<Manufacturer>().unwrap(),
+            Manufacturer::FlexRadio
+        );
+        assert_eq!(
+            "FlexRadio".parse::<Manufacturer>().unwrap(),
+            Manufacturer::FlexRadio
+        );
+    }
+
+    #[test]
+    fn manufacturer_from_str_invalid() {
+        assert!("unknown".parse::<Manufacturer>().is_err());
+    }
+
+    #[test]
+    fn manufacturer_default_connection() {
+        assert_eq!(
+            Manufacturer::Icom.default_connection(),
+            ConnectionType::Serial
+        );
+        assert_eq!(
+            Manufacturer::Yaesu.default_connection(),
+            ConnectionType::Serial
+        );
+        assert_eq!(
+            Manufacturer::Kenwood.default_connection(),
+            ConnectionType::Serial
+        );
+        assert_eq!(
+            Manufacturer::Elecraft.default_connection(),
+            ConnectionType::Serial
+        );
+        assert_eq!(
+            Manufacturer::FlexRadio.default_connection(),
+            ConnectionType::Network
+        );
     }
 }

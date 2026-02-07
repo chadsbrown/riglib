@@ -12,8 +12,10 @@
 //! - [`Error`] / [`Result`] -- error handling
 
 pub mod audio;
+pub mod band;
 pub mod error;
 pub mod events;
+pub mod helpers;
 pub mod rig;
 pub mod transport;
 pub mod types;
@@ -23,8 +25,10 @@ pub use audio::{
     AudioBuffer, AudioCapable, AudioReceiver, AudioSampleFormat, AudioSender, AudioStreamConfig,
     usb_audio_config,
 };
+pub use band::{Band, ParseBandError};
 pub use error::{Error, Result};
 pub use events::RigEvent;
+pub use helpers::{format_freq_mhz, s_units_from_dbm};
 pub use rig::Rig;
 pub use transport::Transport;
 pub use types::*;

@@ -42,4 +42,26 @@ pub trait Transport: Send + Sync {
 
     /// Check whether the transport is currently connected.
     fn is_connected(&self) -> bool;
+
+    /// Assert or de-assert the DTR (Data Terminal Ready) serial line.
+    ///
+    /// Used for hardware PTT or CW keying on serial transports.
+    /// Returns [`Error::Unsupported`](crate::error::Error::Unsupported) on
+    /// transports that don't have serial control lines (TCP, UDP, mock).
+    async fn set_dtr(&mut self, _on: bool) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "DTR control not supported by this transport".into(),
+        ))
+    }
+
+    /// Assert or de-assert the RTS (Request To Send) serial line.
+    ///
+    /// Used for hardware PTT or CW keying on serial transports.
+    /// Returns [`Error::Unsupported`](crate::error::Error::Unsupported) on
+    /// transports that don't have serial control lines (TCP, UDP, mock).
+    async fn set_rts(&mut self, _on: bool) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "RTS control not supported by this transport".into(),
+        ))
+    }
 }

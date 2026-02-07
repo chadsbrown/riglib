@@ -50,6 +50,10 @@ pub struct MockTransport {
     connected: bool,
     /// Log of all bytes sent through this transport.
     sent_log: Vec<Vec<u8>>,
+    /// Current DTR line state.
+    dtr_state: bool,
+    /// Current RTS line state.
+    rts_state: bool,
 }
 
 impl MockTransport {
@@ -61,6 +65,8 @@ impl MockTransport {
             response_cursor: 0,
             connected: true,
             sent_log: Vec::new(),
+            dtr_state: false,
+            rts_state: false,
         }
     }
 
@@ -93,6 +99,16 @@ impl MockTransport {
     /// return [`Error::NotConnected`].
     pub fn set_connected(&mut self, connected: bool) {
         self.connected = connected;
+    }
+
+    /// Return the current DTR line state.
+    pub fn dtr_state(&self) -> bool {
+        self.dtr_state
+    }
+
+    /// Return the current RTS line state.
+    pub fn rts_state(&self) -> bool {
+        self.rts_state
     }
 }
 
@@ -165,6 +181,22 @@ impl Transport for MockTransport {
 
     fn is_connected(&self) -> bool {
         self.connected
+    }
+
+    async fn set_dtr(&mut self, on: bool) -> Result<()> {
+        if !self.connected {
+            return Err(Error::NotConnected);
+        }
+        self.dtr_state = on;
+        Ok(())
+    }
+
+    async fn set_rts(&mut self, on: bool) -> Result<()> {
+        if !self.connected {
+            return Err(Error::NotConnected);
+        }
+        self.rts_state = on;
+        Ok(())
     }
 }
 

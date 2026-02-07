@@ -468,6 +468,12 @@ impl Rig for FlexRadio {
         Ok(())
     }
 
+    async fn set_cw_key(&self, _on: bool) -> Result<()> {
+        Err(Error::Unsupported(
+            "CW key line control not supported on FlexRadio (network-only transport)".into(),
+        ))
+    }
+
     fn subscribe(&self) -> Result<broadcast::Receiver<RigEvent>> {
         Ok(self.client.subscribe())
     }

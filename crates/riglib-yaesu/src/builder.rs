@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use riglib_core::error::{Error, Result};
 use riglib_core::transport::Transport;
+use riglib_core::types::{KeyLine, PttMethod};
 
 use crate::models::YaesuModel;
 use crate::rig::YaesuRig;
@@ -46,6 +47,8 @@ pub struct YaesuBuilder {
     auto_retry: bool,
     max_retries: u32,
     command_timeout: Duration,
+    ptt_method: PttMethod,
+    key_line: KeyLine,
     /// USB audio device name for audio streaming (e.g. "USB Audio CODEC").
     #[cfg(feature = "audio")]
     audio_device_name: Option<String>,
@@ -67,6 +70,8 @@ impl YaesuBuilder {
             auto_retry: true,
             max_retries: 3,
             command_timeout: Duration::from_millis(500),
+            ptt_method: PttMethod::Cat,
+            key_line: KeyLine::None,
             #[cfg(feature = "audio")]
             audio_device_name: None,
         }
@@ -117,6 +122,18 @@ impl YaesuBuilder {
         self
     }
 
+    /// Set the PTT method: CAT command (default), DTR line, or RTS line.
+    pub fn ptt_method(mut self, method: PttMethod) -> Self {
+        self.ptt_method = method;
+        self
+    }
+
+    /// Set the CW key line: None (default), DTR, or RTS.
+    pub fn key_line(mut self, line: KeyLine) -> Self {
+        self.key_line = line;
+        self
+    }
+
     /// Build a [`YaesuRig`] using a serial transport.
     ///
     /// Requires that [`serial_port()`](Self::serial_port) has been called.
@@ -145,16 +162,30 @@ impl YaesuBuilder {
     /// `MockTransport` from `riglib-test-harness`) and for
     /// advanced use cases where the caller manages the transport
     /// lifecycle directly.
-    pub fn build_with_transport(self, transport: Box<dyn Transport>) -> YaesuRig {
-        YaesuRig::new(
+    pub fn build_with_transport(self, transport: Box<dyn Transport>) -> Result<YaesuRig> {
+        // Validate that ptt_method and key_line don't use the same serial line.
+        if self.ptt_method == PttMethod::Dtr && self.key_line == KeyLine::Dtr {
+            return Err(Error::InvalidParameter(
+                "ptt_method and key_line cannot both use DTR".into(),
+            ));
+        }
+        if self.ptt_method == PttMethod::Rts && self.key_line == KeyLine::Rts {
+            return Err(Error::InvalidParameter(
+                "ptt_method and key_line cannot both use RTS".into(),
+            ));
+        }
+
+        Ok(YaesuRig::new(
             transport,
             self.model,
             self.auto_retry,
             self.max_retries,
             self.command_timeout,
+            self.ptt_method,
+            self.key_line,
             #[cfg(feature = "audio")]
             self.audio_device_name,
-        )
+        ))
     }
 }
 
@@ -168,7 +199,9 @@ mod tests {
     #[tokio::test]
     async fn test_builder_defaults() {
         let mock = MockTransport::new();
-        let rig = YaesuBuilder::new(ft_dx10()).build_with_transport(Box::new(mock));
+        let rig = YaesuBuilder::new(ft_dx10())
+            .build_with_transport(Box::new(mock))
+            .unwrap();
 
         assert_eq!(rig.info().manufacturer, riglib_core::Manufacturer::Yaesu);
         assert_eq!(rig.info().model_name, "FT-DX10");
@@ -183,7 +216,8 @@ mod tests {
             .auto_retry(false)
             .max_retries(5)
             .command_timeout(Duration::from_millis(200))
-            .build_with_transport(Box::new(mock));
+            .build_with_transport(Box::new(mock))
+            .unwrap();
 
         assert_eq!(rig.info().model_name, "FT-DX101D");
         let caps = rig.capabilities();
@@ -206,7 +240,8 @@ mod tests {
             .auto_retry(true)
             .max_retries(5)
             .command_timeout(Duration::from_millis(300))
-            .build_with_transport(Box::new(mock));
+            .build_with_transport(Box::new(mock))
+            .unwrap();
 
         assert_eq!(rig.info().model_name, "FT-DX10");
     }

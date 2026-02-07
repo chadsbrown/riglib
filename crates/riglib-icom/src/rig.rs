@@ -40,6 +40,8 @@ pub struct IcomRig {
     collision_recovery: bool,
     command_timeout: Duration,
     info: RigInfo,
+    ptt_method: PttMethod,
+    key_line: KeyLine,
     /// Handle to the background transceive reader task, if active.
     transceive_handle: Mutex<Option<TransceiveHandle>>,
     /// USB audio device name (e.g. "USB Audio CODEC"). When set, this rig
@@ -66,6 +68,8 @@ impl IcomRig {
         max_retries: u32,
         collision_recovery: bool,
         command_timeout: Duration,
+        ptt_method: PttMethod,
+        key_line: KeyLine,
         #[cfg(feature = "audio")] audio_device_name: Option<String>,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(256);
@@ -84,6 +88,8 @@ impl IcomRig {
             collision_recovery,
             command_timeout,
             info,
+            ptt_method,
+            key_line,
             transceive_handle: Mutex::new(None),
             #[cfg(feature = "audio")]
             audio_device_name,
@@ -157,7 +163,7 @@ impl IcomRig {
     ) -> Result<CivFrame> {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
 
-        let request = CommandRequest {
+        let request = CommandRequest::CivCommand {
             cmd_bytes: cmd.to_vec(),
             response_tx,
         };
@@ -176,6 +182,42 @@ impl IcomRig {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(Error::NotConnected), // oneshot sender dropped
             Err(_) => Err(Error::Timeout),          // overall timeout
+        }
+    }
+
+    /// Set a serial control line (DTR or RTS) via the transport.
+    ///
+    /// If transceive mode is active, the request is forwarded through the
+    /// command channel to the reader task which owns the transport.
+    async fn set_serial_line(&self, dtr: bool, on: bool) -> Result<()> {
+        let maybe_sender = {
+            let guard = self.transceive_handle.lock().await;
+            guard.as_ref().map(|h| h.cmd_tx.clone())
+        };
+
+        if let Some(cmd_tx) = maybe_sender {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            let request = if dtr {
+                CommandRequest::SetDtr { on, response_tx }
+            } else {
+                CommandRequest::SetRts { on, response_tx }
+            };
+            cmd_tx
+                .send(request)
+                .await
+                .map_err(|_| Error::NotConnected)?;
+            match tokio::time::timeout(Duration::from_millis(500), response_rx).await {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) => Err(Error::NotConnected),
+                Err(_) => Err(Error::Timeout),
+            }
+        } else {
+            let mut transport = self.transport.lock().await;
+            if dtr {
+                transport.set_dtr(on).await
+            } else {
+                transport.set_rts(on).await
+            }
         }
     }
 
@@ -542,9 +584,21 @@ impl Rig for IcomRig {
     }
 
     async fn set_ptt(&self, on: bool) -> Result<()> {
-        let cmd = commands::cmd_set_ptt(self.civ_address, on);
-        debug!(on, "setting PTT");
-        self.execute_ack_command(&cmd).await?;
+        match self.ptt_method {
+            PttMethod::Cat => {
+                let cmd = commands::cmd_set_ptt(self.civ_address, on);
+                debug!(on, "setting PTT via CAT");
+                self.execute_ack_command(&cmd).await?;
+            }
+            PttMethod::Dtr => {
+                debug!(on, "setting PTT via DTR");
+                self.set_serial_line(true, on).await?;
+            }
+            PttMethod::Rts => {
+                debug!(on, "setting PTT via RTS");
+                self.set_serial_line(false, on).await?;
+            }
+        }
         let _ = self.event_tx.send(RigEvent::PttChanged { on });
         Ok(())
     }
@@ -632,6 +686,20 @@ impl Rig for IcomRig {
         self.execute_ack_command(&cmd).await
     }
 
+    async fn set_cw_key(&self, on: bool) -> Result<()> {
+        match self.key_line {
+            KeyLine::None => Err(Error::Unsupported("no CW key line configured".into())),
+            KeyLine::Dtr => {
+                debug!(on, "setting CW key via DTR");
+                self.set_serial_line(true, on).await
+            }
+            KeyLine::Rts => {
+                debug!(on, "setting CW key via RTS");
+                self.set_serial_line(false, on).await
+            }
+        }
+    }
+
     fn subscribe(&self) -> Result<broadcast::Receiver<RigEvent>> {
         Ok(self.event_tx.subscribe())
     }
@@ -710,6 +778,8 @@ mod tests {
             3,    // max_retries
             true, // collision_recovery
             Duration::from_millis(500),
+            PttMethod::Cat,
+            KeyLine::None,
             #[cfg(feature = "audio")]
             None,
         )
@@ -1183,6 +1253,8 @@ mod tests {
                 3,
                 true,
                 Duration::from_millis(500),
+                PttMethod::Cat,
+                KeyLine::None,
                 device_name.map(|s| s.to_string()),
             )
         }

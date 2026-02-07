@@ -370,6 +370,36 @@ impl Transport for SerialTransport {
     fn is_connected(&self) -> bool {
         self.port.is_some()
     }
+
+    async fn set_dtr(&mut self, on: bool) -> Result<()> {
+        let port = self.port.as_mut().ok_or(Error::NotConnected)?;
+        port.write_data_terminal_ready(on).map_err(|e| {
+            tracing::error!(
+                port = %self.port_name,
+                on,
+                error = %e,
+                "Failed to set DTR"
+            );
+            Error::Transport(format!("failed to set DTR on {}: {}", self.port_name, e))
+        })?;
+        tracing::trace!(port = %self.port_name, on, "DTR set");
+        Ok(())
+    }
+
+    async fn set_rts(&mut self, on: bool) -> Result<()> {
+        let port = self.port.as_mut().ok_or(Error::NotConnected)?;
+        port.write_request_to_send(on).map_err(|e| {
+            tracing::error!(
+                port = %self.port_name,
+                on,
+                error = %e,
+                "Failed to set RTS"
+            );
+            Error::Transport(format!("failed to set RTS on {}: {}", self.port_name, e))
+        })?;
+        tracing::trace!(port = %self.port_name, on, "RTS set");
+        Ok(())
+    }
 }
 
 // Implement Drop to ensure the port is closed properly
