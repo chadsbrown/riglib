@@ -1116,7 +1116,7 @@ Same pattern as Phase 9. `cmd_set_ai()` already exists. Elecraft uses Kenwood-st
 
 ---
 
-## Phase 11: Yaesu Transceive (AI Mode)
+## Phase 11: Yaesu Transceive (AI Mode) — ✅ DONE
 
 Need to add AI command first (not in commands.rs yet).
 

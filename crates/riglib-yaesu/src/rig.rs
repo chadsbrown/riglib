@@ -25,6 +25,7 @@ use riglib_core::audio::{AudioCapable, AudioReceiver, AudioSender, AudioStreamCo
 use crate::commands;
 use crate::models::YaesuModel;
 use crate::protocol::{self, DecodeResult};
+use crate::transceive::{self, CommandRequest, TransceiveHandle};
 
 /// A connected Yaesu transceiver controlled over CAT.
 ///
@@ -40,6 +41,8 @@ pub struct YaesuRig {
     info: RigInfo,
     ptt_method: PttMethod,
     key_line: KeyLine,
+    /// Handle to the background AI transceive reader task, if active.
+    transceive_handle: Mutex<Option<TransceiveHandle>>,
     /// USB audio device name (e.g. "USB Audio CODEC"). When set, this rig
     /// supports audio streaming via the `AudioCapable` trait.
     #[cfg(feature = "audio")]
@@ -82,6 +85,7 @@ impl YaesuRig {
             info,
             ptt_method,
             key_line,
+            transceive_handle: Mutex::new(None),
             #[cfg(feature = "audio")]
             audio_device_name,
             #[cfg(feature = "audio")]
@@ -89,21 +93,144 @@ impl YaesuRig {
         }
     }
 
+    /// Enable Yaesu AI (Auto Information) mode.
+    ///
+    /// Moves the transport from the `Arc<Mutex<>>` into a background reader
+    /// task that listens for unsolicited AI responses (frequency, mode, PTT,
+    /// RIT/XIT changes) and emits them as events. Commands are forwarded to
+    /// the reader task via an `mpsc` channel.
+    ///
+    /// This should be called once after construction, before issuing
+    /// commands, when AI mode (`AI2;`) is desired.
+    pub async fn enable_ai_mode(&self) {
+        let mut handle_guard = self.transceive_handle.lock().await;
+        if handle_guard.is_some() {
+            debug!("AI transceive already enabled");
+            return;
+        }
+
+        // Take the real transport out and replace with a sentinel.
+        let real_transport = {
+            let mut transport_guard = self.transport.lock().await;
+            std::mem::replace(
+                &mut *transport_guard,
+                Box::new(transceive::DisconnectedTransport) as Box<dyn Transport>,
+            )
+        };
+
+        let handle = transceive::spawn_reader_task(
+            real_transport,
+            self.event_tx.clone(),
+            self.auto_retry,
+            self.max_retries,
+            self.command_timeout,
+        );
+
+        debug!("Yaesu AI transceive mode enabled");
+        *handle_guard = Some(handle);
+    }
+
     /// Send a CAT command and wait for the rig's response.
     ///
-    /// Handles:
-    /// - Buffered reading until the `;` terminator is found
-    /// - Error responses (`?;`) returned as `Error::Protocol`
-    /// - Timeout with configurable retry count
+    /// Dispatches to either the transceive channel path (if AI mode is
+    /// enabled) or the direct transport path.
     ///
-    /// Returns the decoded prefix and data portions of the response.
+    /// Returns the decoded prefix and data on success.
     async fn execute_command(&self, cmd: &[u8]) -> Result<(String, String)> {
+        // Check if AI transceive mode is active. Lock briefly to clone the sender.
+        let maybe_sender = {
+            let guard = self.transceive_handle.lock().await;
+            guard.as_ref().map(|h| h.cmd_tx.clone())
+        };
+
+        if let Some(cmd_tx) = maybe_sender {
+            self.execute_command_via_channel(cmd, cmd_tx).await
+        } else {
+            self.execute_command_direct(cmd).await
+        }
+    }
+
+    /// Execute a command by sending it through the AI transceive reader task.
+    async fn execute_command_via_channel(
+        &self,
+        cmd: &[u8],
+        cmd_tx: tokio::sync::mpsc::Sender<CommandRequest>,
+    ) -> Result<(String, String)> {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+        let request = CommandRequest::CatCommand {
+            cmd_bytes: cmd.to_vec(),
+            response_tx,
+        };
+
+        cmd_tx
+            .send(request)
+            .await
+            .map_err(|_| Error::NotConnected)?;
+
+        match tokio::time::timeout(
+            self.command_timeout + Duration::from_millis(500),
+            response_rx,
+        )
+        .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(Error::NotConnected), // oneshot sender dropped
+            Err(_) => Err(Error::Timeout),           // overall timeout
+        }
+    }
+
+    /// Set a serial control line (DTR or RTS) via the transport.
+    ///
+    /// If AI transceive mode is active, the request is forwarded through the
+    /// command channel to the reader task which owns the transport.
+    async fn set_serial_line(&self, dtr: bool, on: bool) -> Result<()> {
+        let maybe_sender = {
+            let guard = self.transceive_handle.lock().await;
+            guard.as_ref().map(|h| h.cmd_tx.clone())
+        };
+
+        if let Some(cmd_tx) = maybe_sender {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            let request = if dtr {
+                CommandRequest::SetDtr { on, response_tx }
+            } else {
+                CommandRequest::SetRts { on, response_tx }
+            };
+            cmd_tx
+                .send(request)
+                .await
+                .map_err(|_| Error::NotConnected)?;
+            match tokio::time::timeout(Duration::from_millis(500), response_rx).await {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) => Err(Error::NotConnected),
+                Err(_) => Err(Error::Timeout),
+            }
+        } else {
+            let mut transport = self.transport.lock().await;
+            if dtr {
+                transport.set_dtr(on).await
+            } else {
+                transport.set_rts(on).await
+            }
+        }
+    }
+
+    /// Send a CAT command directly on the transport (non-AI mode).
+    ///
+    /// Reads bytes from the transport until a semicolon terminator is found,
+    /// then decodes the response. Handles:
+    /// - Timeout with configurable retry count
+    /// - Error responses (`?;`)
+    ///
+    /// Returns the decoded prefix and data on success.
+    async fn execute_command_direct(&self, cmd: &[u8]) -> Result<(String, String)> {
         let retries = if self.auto_retry { self.max_retries } else { 0 };
         let mut transport = self.transport.lock().await;
 
         for attempt in 0..=retries {
             if attempt > 0 {
-                debug!(attempt, "CAT command retry");
+                debug!(attempt, "Yaesu CAT command retry");
                 // Brief backoff before retry (increases with each attempt).
                 tokio::time::sleep(Duration::from_millis(20 * attempt as u64)).await;
             }
@@ -331,13 +458,11 @@ impl Rig for YaesuRig {
             }
             PttMethod::Dtr => {
                 debug!(on, "setting PTT via DTR");
-                let mut transport = self.transport.lock().await;
-                transport.set_dtr(on).await?;
+                self.set_serial_line(true, on).await?;
             }
             PttMethod::Rts => {
                 debug!(on, "setting PTT via RTS");
-                let mut transport = self.transport.lock().await;
-                transport.set_rts(on).await?;
+                self.set_serial_line(false, on).await?;
             }
         }
         let _ = self.event_tx.send(RigEvent::PttChanged { on });
@@ -433,13 +558,11 @@ impl Rig for YaesuRig {
             )),
             KeyLine::Dtr => {
                 debug!(on, "CW key via DTR");
-                let mut transport = self.transport.lock().await;
-                transport.set_dtr(on).await
+                self.set_serial_line(true, on).await
             }
             KeyLine::Rts => {
                 debug!(on, "CW key via RTS");
-                let mut transport = self.transport.lock().await;
-                transport.set_rts(on).await
+                self.set_serial_line(false, on).await
             }
         }
     }

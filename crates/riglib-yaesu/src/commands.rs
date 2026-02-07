@@ -416,6 +416,26 @@ pub fn cmd_stop_cw_message() -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------
+// Auto Information (AI) command builders
+// ---------------------------------------------------------------
+
+/// Build a "set Auto Information mode" command.
+///
+/// - `AI0;` disables auto information (no unsolicited messages).
+/// - `AI2;` enables auto information (rig pushes state changes).
+///
+/// # Arguments
+///
+/// * `on` - `true` to enable AI mode, `false` to disable.
+pub fn cmd_set_ai(on: bool) -> Vec<u8> {
+    if on {
+        encode_command("AI", "2")
+    } else {
+        encode_command("AI", "0")
+    }
+}
+
+// ---------------------------------------------------------------
 // Response parsers
 // ---------------------------------------------------------------
 
@@ -1871,5 +1891,19 @@ mod tests {
     fn cmd_set_power_max_3_digits() {
         let cmd = cmd_set_power(999);
         assert_eq!(cmd, b"PC999;");
+    }
+
+    // ---------------------------------------------------------------
+    // AI commands
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cmd_set_ai_on() {
+        assert_eq!(cmd_set_ai(true), b"AI2;");
+    }
+
+    #[test]
+    fn cmd_set_ai_off() {
+        assert_eq!(cmd_set_ai(false), b"AI0;");
     }
 }

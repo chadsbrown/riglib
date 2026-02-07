@@ -39,6 +39,7 @@ pub mod commands;
 pub mod models;
 pub mod protocol;
 pub mod rig;
+pub mod transceive;
 
 pub use builder::YaesuBuilder;
 pub use rig::YaesuRig;
