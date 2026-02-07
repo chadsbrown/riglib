@@ -51,14 +51,34 @@ pub(crate) enum CommandRequest {
         on: bool,
         response_tx: oneshot::Sender<Result<()>>,
     },
+    /// Shut down the reader loop and return transport ownership.
+    Shutdown {
+        transport_tx: oneshot::Sender<Box<dyn Transport>>,
+    },
 }
 
 /// Handle to the background transceive reader task.
 pub(crate) struct TransceiveHandle {
     pub cmd_tx: mpsc::Sender<CommandRequest>,
-    /// Kept so the task can be aborted when the rig is dropped.
-    #[allow(dead_code)]
+    /// Kept so the task can be joined on shutdown or aborted when the rig is dropped.
     pub task_handle: JoinHandle<()>,
+}
+
+impl TransceiveHandle {
+    /// Shut down the background reader task and recover the transport.
+    ///
+    /// Sends a `Shutdown` request to the reader loop (which sends `AI0;` to
+    /// disable AI mode on the rig), waits for the transport to be returned
+    /// via a oneshot channel, then joins the task.
+    pub(crate) async fn shutdown(self) -> Result<Box<dyn Transport>> {
+        let (transport_tx, transport_rx) = oneshot::channel();
+        // Don't care if send fails -- reader might have already exited.
+        let _ = self.cmd_tx.send(CommandRequest::Shutdown { transport_tx }).await;
+        let transport = transport_rx.await.map_err(|_| Error::NotConnected)?;
+        // Wait for the task to finish.
+        let _ = self.task_handle.await;
+        Ok(transport)
+    }
 }
 
 /// Configuration for the reader task's retry/timeout behavior.
@@ -286,6 +306,13 @@ async fn reader_loop(
                     Some(CommandRequest::SetRts { on, response_tx }) => {
                         let result = transport.set_rts(on).await;
                         let _ = response_tx.send(result);
+                    }
+                    Some(CommandRequest::Shutdown { transport_tx }) => {
+                        // Disable AI mode on the rig before shutting down.
+                        debug!("shutdown requested, sending AI0; and returning transport");
+                        let _ = transport.send(b"AI0;").await;
+                        let _ = transport_tx.send(transport);
+                        break;
                     }
                     None => {
                         // All senders dropped -- KenwoodRig was dropped.

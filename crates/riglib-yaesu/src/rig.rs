@@ -867,9 +867,22 @@ impl Rig for YaesuRig {
     }
 
     async fn disable_transceive(&self) -> Result<()> {
-        Err(Error::Unsupported(
-            "disable_transceive not yet implemented for Yaesu".into(),
-        ))
+        let handle = {
+            let mut guard = self.transceive_handle.lock().await;
+            guard.take()
+        };
+        let Some(handle) = handle else {
+            return Err(Error::Protocol("transceive not currently enabled".into()));
+        };
+
+        let transport = handle.shutdown().await?;
+
+        // Restore transport to direct mode.
+        let mut transport_guard = self.transport.lock().await;
+        *transport_guard = transport;
+
+        debug!("Yaesu AI transceive mode disabled");
+        Ok(())
     }
 
     fn subscribe(&self) -> Result<broadcast::Receiver<RigEvent>> {
