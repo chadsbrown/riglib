@@ -610,8 +610,8 @@ pub fn parse_agc_response(data: &str) -> Result<u8> {
 
 /// Parse a preamp response from the data portion of a `PA0` response.
 ///
-/// Expects 2 characters representing the preamp level.
-/// Values: 00=Off, 01=Amp1, 02=Amp2.
+/// Accepts 1 or 2 characters representing the preamp level.
+/// Values: 0=Off, 1=Amp1, 2=Amp2.
 ///
 /// Returns the raw level value.
 ///
@@ -619,9 +619,9 @@ pub fn parse_agc_response(data: &str) -> Result<u8> {
 ///
 /// Returns [`Error::Protocol`] if the data cannot be parsed.
 pub fn parse_preamp_response(data: &str) -> Result<u8> {
-    if data.len() != 2 {
+    if data.is_empty() || data.len() > 2 {
         return Err(Error::Protocol(format!(
-            "expected 2 characters for preamp response, got {} characters: {data:?}",
+            "expected 1-2 characters for preamp response, got {} characters: {data:?}",
             data.len()
         )));
     }
@@ -633,8 +633,8 @@ pub fn parse_preamp_response(data: &str) -> Result<u8> {
 
 /// Parse an attenuator response from the data portion of an `RA0` response.
 ///
-/// Expects 2 characters representing the attenuator level.
-/// Values: 00=Off, 01=On.
+/// Expects 1-2 characters representing the attenuator level.
+/// Values: 0/00=Off, 1/01=On.
 ///
 /// Returns the raw level value.
 ///
@@ -642,9 +642,9 @@ pub fn parse_preamp_response(data: &str) -> Result<u8> {
 ///
 /// Returns [`Error::Protocol`] if the data cannot be parsed.
 pub fn parse_attenuator_response(data: &str) -> Result<u8> {
-    if data.len() != 2 {
+    if data.is_empty() || data.len() > 2 {
         return Err(Error::Protocol(format!(
-            "expected 2 characters for attenuator response, got {} characters: {data:?}",
+            "expected 1-2 characters for attenuator response, got {} characters: {data:?}",
             data.len()
         )));
     }
@@ -1171,8 +1171,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_preamp_single_digit() {
+        assert_eq!(parse_preamp_response("0").unwrap(), 0);
+        assert_eq!(parse_preamp_response("1").unwrap(), 1);
+        assert_eq!(parse_preamp_response("2").unwrap(), 2);
+    }
+
+    #[test]
     fn parse_preamp_wrong_length() {
-        assert!(parse_preamp_response("0").is_err());
+        assert!(parse_preamp_response("").is_err());
         assert!(parse_preamp_response("001").is_err());
     }
 
@@ -1206,8 +1213,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_attenuator_single_digit() {
+        assert_eq!(parse_attenuator_response("0").unwrap(), 0);
+        assert_eq!(parse_attenuator_response("1").unwrap(), 1);
+    }
+
+    #[test]
     fn parse_attenuator_wrong_length() {
-        assert!(parse_attenuator_response("0").is_err());
+        assert!(parse_attenuator_response("").is_err());
         assert!(parse_attenuator_response("001").is_err());
     }
 

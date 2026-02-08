@@ -1799,7 +1799,7 @@ mod tests {
     async fn test_get_preamp_off() {
         let mut mock = MockTransport::new();
         let read_cmd = commands::cmd_read_preamp();
-        mock.expect(&read_cmd, b"PA000;");
+        mock.expect(&read_cmd, b"PA00;");
 
         let rig = make_test_rig(mock);
         let level = rig.get_preamp(ReceiverId::VFO_A).await.unwrap();
@@ -1810,7 +1810,7 @@ mod tests {
     async fn test_get_preamp_1() {
         let mut mock = MockTransport::new();
         let read_cmd = commands::cmd_read_preamp();
-        mock.expect(&read_cmd, b"PA001;");
+        mock.expect(&read_cmd, b"PA01;");
 
         let rig = make_test_rig(mock);
         let level = rig.get_preamp(ReceiverId::VFO_A).await.unwrap();
@@ -1821,7 +1821,7 @@ mod tests {
     async fn test_get_preamp_2() {
         let mut mock = MockTransport::new();
         let read_cmd = commands::cmd_read_preamp();
-        mock.expect(&read_cmd, b"PA002;");
+        mock.expect(&read_cmd, b"PA02;");
 
         let rig = make_test_rig(mock);
         let level = rig.get_preamp(ReceiverId::VFO_A).await.unwrap();
@@ -1832,7 +1832,7 @@ mod tests {
     async fn test_set_preamp_off() {
         let mut mock = MockTransport::new();
         let set_cmd = commands::cmd_set_preamp(0);
-        mock.expect(&set_cmd, b"PA000;");
+        mock.expect(&set_cmd, b"PA00;");
 
         let rig = make_test_rig(mock);
         rig.set_preamp(ReceiverId::VFO_A, PreampLevel::Off)
@@ -1844,7 +1844,7 @@ mod tests {
     async fn test_set_preamp_1() {
         let mut mock = MockTransport::new();
         let set_cmd = commands::cmd_set_preamp(1);
-        mock.expect(&set_cmd, b"PA001;");
+        mock.expect(&set_cmd, b"PA01;");
 
         let rig = make_test_rig(mock);
         rig.set_preamp(ReceiverId::VFO_A, PreampLevel::Preamp1)
@@ -1856,7 +1856,7 @@ mod tests {
     async fn test_set_preamp_2_on_dx101d() {
         let mut mock = MockTransport::new();
         let set_cmd = commands::cmd_set_preamp(2);
-        mock.expect(&set_cmd, b"PA002;");
+        mock.expect(&set_cmd, b"PA02;");
 
         // FT-DX101D has_preamp2 = true, so this should succeed
         let rig = make_dual_rx_rig(mock);
@@ -1890,7 +1890,7 @@ mod tests {
     async fn test_preamp_get_emits_event() {
         let mut mock = MockTransport::new();
         let read_cmd = commands::cmd_read_preamp();
-        mock.expect(&read_cmd, b"PA001;");
+        mock.expect(&read_cmd, b"PA01;");
 
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();
@@ -1912,7 +1912,7 @@ mod tests {
     async fn test_preamp_set_emits_event() {
         let mut mock = MockTransport::new();
         let set_cmd = commands::cmd_set_preamp(1);
-        mock.expect(&set_cmd, b"PA001;");
+        mock.expect(&set_cmd, b"PA01;");
 
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();
@@ -1939,7 +1939,7 @@ mod tests {
     async fn test_get_attenuator_off() {
         let mut mock = MockTransport::new();
         let read_cmd = commands::cmd_read_attenuator();
-        mock.expect(&read_cmd, b"RA000;");
+        mock.expect(&read_cmd, b"RA00;");
 
         let rig = make_test_rig(mock);
         let db = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
@@ -1950,7 +1950,7 @@ mod tests {
     async fn test_get_attenuator_on() {
         let mut mock = MockTransport::new();
         let read_cmd = commands::cmd_read_attenuator();
-        mock.expect(&read_cmd, b"RA001;");
+        mock.expect(&read_cmd, b"RA01;");
 
         let rig = make_test_rig(mock);
         let db = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
@@ -1962,7 +1962,7 @@ mod tests {
     async fn test_set_attenuator_off() {
         let mut mock = MockTransport::new();
         let set_cmd = commands::cmd_set_attenuator(0);
-        mock.expect(&set_cmd, b"RA000;");
+        mock.expect(&set_cmd, b"RA00;");
 
         let rig = make_test_rig(mock);
         rig.set_attenuator(ReceiverId::VFO_A, 0).await.unwrap();
@@ -1973,7 +1973,7 @@ mod tests {
         let mut mock = MockTransport::new();
         // Any non-zero dB maps to value 1 on Yaesu (binary attenuator)
         let set_cmd = commands::cmd_set_attenuator(1);
-        mock.expect(&set_cmd, b"RA001;");
+        mock.expect(&set_cmd, b"RA01;");
 
         let rig = make_test_rig(mock);
         rig.set_attenuator(ReceiverId::VFO_A, 6).await.unwrap();
@@ -1984,7 +1984,7 @@ mod tests {
         let mut mock = MockTransport::new();
         // Any non-zero dB maps to 1 on Yaesu
         let set_cmd = commands::cmd_set_attenuator(1);
-        mock.expect(&set_cmd, b"RA001;");
+        mock.expect(&set_cmd, b"RA01;");
 
         let rig = make_test_rig(mock);
         rig.set_attenuator(ReceiverId::VFO_A, 18).await.unwrap();
@@ -1994,7 +1994,7 @@ mod tests {
     async fn test_attenuator_get_emits_event() {
         let mut mock = MockTransport::new();
         let read_cmd = commands::cmd_read_attenuator();
-        mock.expect(&read_cmd, b"RA001;");
+        mock.expect(&read_cmd, b"RA01;");
 
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();
@@ -2016,7 +2016,7 @@ mod tests {
     async fn test_attenuator_set_emits_event() {
         let mut mock = MockTransport::new();
         let set_cmd = commands::cmd_set_attenuator(1);
-        mock.expect(&set_cmd, b"RA001;");
+        mock.expect(&set_cmd, b"RA01;");
 
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();
