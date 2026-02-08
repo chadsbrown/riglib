@@ -284,9 +284,7 @@ impl YaesuRig {
                         // Timeout is success for SET commands -- radio sent nothing back.
                         // But check if we accumulated an error response.
                         if !drain_buf.is_empty() {
-                            if let DecodeResult::Error(_) =
-                                protocol::decode_response(&drain_buf)
-                            {
+                            if let DecodeResult::Error(_) = protocol::decode_response(&drain_buf) {
                                 return Err(Error::Protocol(
                                     "rig returned error response (?;)".into(),
                                 ));
@@ -333,7 +331,7 @@ impl YaesuRig {
         )
         .await
         {
-            Ok(Ok(Ok(_))) => Ok(()),       // Got an echo, consumed it
+            Ok(Ok(Ok(_))) => Ok(()), // Got an echo, consumed it
             Ok(Ok(Err(e))) => {
                 // Check if it was a protocol error (?;)
                 if matches!(e, Error::Protocol(_)) {
@@ -344,7 +342,7 @@ impl YaesuRig {
                 }
             }
             Ok(Err(_)) => Err(Error::NotConnected), // oneshot sender dropped
-            Err(_) => Ok(()),              // timeout is success for SET commands
+            Err(_) => Ok(()),                       // timeout is success for SET commands
         }
     }
 

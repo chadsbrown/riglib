@@ -376,9 +376,7 @@ impl ElecraftRig {
                     }
                     Ok(Err(Error::Timeout)) | Err(_) => {
                         if !drain_buf.is_empty() {
-                            if let DecodeResult::Error(_) =
-                                protocol::decode_response(&drain_buf)
-                            {
+                            if let DecodeResult::Error(_) = protocol::decode_response(&drain_buf) {
                                 return Err(Error::Protocol(
                                     "rig returned error response (?;)".into(),
                                 ));
@@ -826,7 +824,8 @@ impl Rig for ElecraftRig {
             let actual = self.get_agc(rx).await?;
             if actual != mode {
                 // K4 maps Medium -> Slow, so allow that.
-                let acceptable = mode == AgcMode::Medium && actual == AgcMode::Slow && self.model.is_k4;
+                let acceptable =
+                    mode == AgcMode::Medium && actual == AgcMode::Slow && self.model.is_k4;
                 if !acceptable {
                     return Err(Error::Protocol(format!(
                         "set_agc verify failed: expected {mode}, got {actual}"

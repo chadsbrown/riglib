@@ -373,9 +373,7 @@ impl KenwoodRig {
                     }
                     Ok(Err(Error::Timeout)) | Err(_) => {
                         if !drain_buf.is_empty() {
-                            if let DecodeResult::Error(_) =
-                                protocol::decode_response(&drain_buf)
-                            {
+                            if let DecodeResult::Error(_) = protocol::decode_response(&drain_buf) {
                                 return Err(Error::Protocol(
                                     "rig returned error response (?;)".into(),
                                 ));
