@@ -1184,7 +1184,7 @@ Populate the new `RigCapabilities` fields (from Phase 1) for every model definit
 
 ---
 
-## Phase 14: Test App Updates
+## Phase 14: Test App Updates — ✅ DONE
 
 Add CLI options and interactive commands for all new features.
 

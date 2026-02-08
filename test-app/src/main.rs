@@ -38,7 +38,9 @@ use riglib::kenwood::builder::KenwoodBuilder;
 use riglib::kenwood::models as kenwood_models;
 use riglib::yaesu::builder::YaesuBuilder;
 use riglib::yaesu::models as yaesu_models;
-use riglib::{AudioCapable, KeyLine, Mode, PttMethod, ReceiverId, Rig};
+use riglib::{
+    AgcMode, AntennaPort, AudioCapable, KeyLine, Mode, PreampLevel, PttMethod, ReceiverId, Rig,
+};
 use riglib_test_harness::MockTransport;
 use riglib_transport::SerialTransport;
 use riglib_transport::audio::list_audio_devices;
@@ -223,6 +225,77 @@ enum Command {
         slice_index: u8,
     },
 
+    /// CW keyer speed operations.
+    Speed {
+        #[command(subcommand)]
+        action: SpeedAction,
+    },
+
+    /// VFO A=B: copy active VFO to inactive.
+    VfoEq {
+        /// Receiver index (default: 0 = VFO-A).
+        #[arg(long, default_value_t = 0)]
+        rx: u8,
+    },
+
+    /// Swap VFO A and VFO B.
+    VfoSwap {
+        /// Receiver index (default: 0 = VFO-A).
+        #[arg(long, default_value_t = 0)]
+        rx: u8,
+    },
+
+    /// Antenna port operations.
+    Ant {
+        #[command(subcommand)]
+        action: AntAction,
+    },
+
+    /// AGC mode operations.
+    Agc {
+        #[command(subcommand)]
+        action: AgcAction,
+    },
+
+    /// Preamp level operations.
+    Preamp {
+        #[command(subcommand)]
+        action: PreampAction,
+    },
+
+    /// Attenuator operations.
+    Att {
+        #[command(subcommand)]
+        action: AttAction,
+    },
+
+    /// RIT (Receiver Incremental Tuning) operations.
+    Rit {
+        #[command(subcommand)]
+        action: RitAction,
+    },
+
+    /// XIT (Transmitter Incremental Tuning) operations.
+    Xit {
+        #[command(subcommand)]
+        action: XitAction,
+    },
+
+    /// Send a CW message as text (rig keyer converts to Morse).
+    Cw {
+        /// The message text to send in CW.
+        message: String,
+    },
+
+    /// Stop any in-progress CW message transmission.
+    CwStop,
+
+    /// Enable or disable transceive (AI) mode.
+    Transceive {
+        #[command(subcommand)]
+        action: TransceiveAction,
+    },
+
     /// Audio streaming operations.
     Audio {
         #[command(subcommand)]
@@ -325,6 +398,131 @@ enum KeyAction {
     /// Assert the CW key line (key down).
     On,
     /// De-assert the CW key line (key up).
+    Off,
+}
+
+#[derive(Subcommand)]
+enum SpeedAction {
+    /// Read the current CW keyer speed.
+    Get,
+    /// Set the CW keyer speed.
+    Set {
+        /// Speed in words per minute.
+        wpm: u8,
+    },
+}
+
+#[derive(Subcommand)]
+enum AntAction {
+    /// Read the currently selected antenna port.
+    Get {
+        /// Receiver index (default: 0 = VFO-A).
+        #[arg(long, default_value_t = 0)]
+        rx: u8,
+    },
+    /// Set the antenna port.
+    Set {
+        /// Antenna port (1-4 or ANT1-ANT4).
+        port: String,
+
+        /// Receiver index (default: 0 = VFO-A).
+        #[arg(long, default_value_t = 0)]
+        rx: u8,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgcAction {
+    /// Read the current AGC mode.
+    Get {
+        /// Receiver index (default: 0 = VFO-A).
+        #[arg(long, default_value_t = 0)]
+        rx: u8,
+    },
+    /// Set the AGC mode.
+    Set {
+        /// AGC mode: off, fast, med, slow.
+        mode: String,
+
+        /// Receiver index (default: 0 = VFO-A).
+        #[arg(long, default_value_t = 0)]
+        rx: u8,
+    },
+}
+
+#[derive(Subcommand)]
+enum PreampAction {
+    /// Read the current preamp level.
+    Get {
+        /// Receiver index (default: 0 = VFO-A).
+        #[arg(long, default_value_t = 0)]
+        rx: u8,
+    },
+    /// Set the preamp level.
+    Set {
+        /// Preamp level: off, 1, 2.
+        level: String,
+
+        /// Receiver index (default: 0 = VFO-A).
+        #[arg(long, default_value_t = 0)]
+        rx: u8,
+    },
+}
+
+#[derive(Subcommand)]
+enum AttAction {
+    /// Read the current attenuator level.
+    Get {
+        /// Receiver index (default: 0 = VFO-A).
+        #[arg(long, default_value_t = 0)]
+        rx: u8,
+    },
+    /// Set the attenuator level.
+    Set {
+        /// Attenuation in dB (0 = off).
+        db: u8,
+
+        /// Receiver index (default: 0 = VFO-A).
+        #[arg(long, default_value_t = 0)]
+        rx: u8,
+    },
+}
+
+#[derive(Subcommand)]
+enum RitAction {
+    /// Read the current RIT state and offset.
+    Get,
+    /// Enable RIT (preserving current offset).
+    On,
+    /// Disable RIT and clear offset.
+    Off,
+    /// Set RIT offset in Hz (enables RIT).
+    Set {
+        /// Offset in hertz (can be negative).
+        offset_hz: i32,
+    },
+}
+
+#[derive(Subcommand)]
+enum XitAction {
+    /// Read the current XIT state and offset.
+    Get,
+    /// Enable XIT (preserving current offset).
+    On,
+    /// Disable XIT and clear offset.
+    Off,
+    /// Set XIT offset in Hz (enables XIT).
+    Set {
+        /// Offset in hertz (can be negative).
+        offset_hz: i32,
+    },
+}
+
+#[derive(Subcommand)]
+enum TransceiveAction {
+    /// Enable transceive (AI) mode.
+    On,
+    /// Disable transceive (AI) mode.
     Off,
 }
 
@@ -1169,6 +1367,181 @@ async fn cmd_key_off(rig: &dyn Rig) -> Result<()> {
     Ok(())
 }
 
+async fn cmd_speed_get(rig: &dyn Rig) -> Result<()> {
+    let wpm = rig.get_cw_speed().await?;
+    println!("CW speed: {wpm} WPM");
+    Ok(())
+}
+
+async fn cmd_speed_set(rig: &dyn Rig, wpm: u8) -> Result<()> {
+    rig.set_cw_speed(wpm).await?;
+    println!("CW speed: set to {wpm} WPM");
+    Ok(())
+}
+
+async fn cmd_vfo_eq(rig: &dyn Rig, rx: u8) -> Result<()> {
+    let rid = receiver_id(rx);
+    rig.set_vfo_a_eq_b(rid).await?;
+    println!("{rid}: VFO A=B");
+    Ok(())
+}
+
+async fn cmd_vfo_swap(rig: &dyn Rig, rx: u8) -> Result<()> {
+    let rid = receiver_id(rx);
+    rig.swap_vfo(rid).await?;
+    println!("{rid}: VFO A/B swapped");
+    Ok(())
+}
+
+async fn cmd_ant_get(rig: &dyn Rig, rx: u8) -> Result<()> {
+    let rid = receiver_id(rx);
+    let port = rig.get_antenna(rid).await?;
+    println!("{rid}: antenna {port}");
+    Ok(())
+}
+
+async fn cmd_ant_set(rig: &dyn Rig, rx: u8, port_str: &str) -> Result<()> {
+    let port: AntennaPort = port_str
+        .parse()
+        .map_err(|e: riglib::ParseModeError| anyhow::anyhow!("{e}"))?;
+    let rid = receiver_id(rx);
+    rig.set_antenna(rid, port).await?;
+    println!("{rid}: antenna set to {port}");
+    Ok(())
+}
+
+async fn cmd_agc_get(rig: &dyn Rig, rx: u8) -> Result<()> {
+    let rid = receiver_id(rx);
+    let mode = rig.get_agc(rid).await?;
+    println!("{rid}: AGC {mode}");
+    Ok(())
+}
+
+async fn cmd_agc_set(rig: &dyn Rig, rx: u8, mode_str: &str) -> Result<()> {
+    let mode: AgcMode = mode_str
+        .parse()
+        .map_err(|e: riglib::ParseModeError| anyhow::anyhow!("{e}"))?;
+    let rid = receiver_id(rx);
+    rig.set_agc(rid, mode).await?;
+    println!("{rid}: AGC set to {mode}");
+    Ok(())
+}
+
+async fn cmd_preamp_get(rig: &dyn Rig, rx: u8) -> Result<()> {
+    let rid = receiver_id(rx);
+    let level = rig.get_preamp(rid).await?;
+    println!("{rid}: preamp {level}");
+    Ok(())
+}
+
+async fn cmd_preamp_set(rig: &dyn Rig, rx: u8, level_str: &str) -> Result<()> {
+    let level: PreampLevel = level_str
+        .parse()
+        .map_err(|e: riglib::ParseModeError| anyhow::anyhow!("{e}"))?;
+    let rid = receiver_id(rx);
+    rig.set_preamp(rid, level).await?;
+    println!("{rid}: preamp set to {level}");
+    Ok(())
+}
+
+async fn cmd_att_get(rig: &dyn Rig, rx: u8) -> Result<()> {
+    let rid = receiver_id(rx);
+    let db = rig.get_attenuator(rid).await?;
+    if db == 0 {
+        println!("{rid}: attenuator OFF");
+    } else {
+        println!("{rid}: attenuator {db} dB");
+    }
+    Ok(())
+}
+
+async fn cmd_att_set(rig: &dyn Rig, rx: u8, db: u8) -> Result<()> {
+    let rid = receiver_id(rx);
+    rig.set_attenuator(rid, db).await?;
+    if db == 0 {
+        println!("{rid}: attenuator set to OFF");
+    } else {
+        println!("{rid}: attenuator set to {db} dB");
+    }
+    Ok(())
+}
+
+async fn cmd_rit_get(rig: &dyn Rig) -> Result<()> {
+    let (enabled, offset) = rig.get_rit().await?;
+    let state = if enabled { "ON" } else { "OFF" };
+    println!("RIT: {state}, offset: {offset} Hz");
+    Ok(())
+}
+
+async fn cmd_rit_on(rig: &dyn Rig) -> Result<()> {
+    let (_enabled, offset) = rig.get_rit().await?;
+    rig.set_rit(true, offset).await?;
+    println!("RIT: ON, offset: {offset} Hz");
+    Ok(())
+}
+
+async fn cmd_rit_off(rig: &dyn Rig) -> Result<()> {
+    rig.set_rit(false, 0).await?;
+    println!("RIT: OFF");
+    Ok(())
+}
+
+async fn cmd_rit_set(rig: &dyn Rig, offset_hz: i32) -> Result<()> {
+    rig.set_rit(true, offset_hz).await?;
+    println!("RIT: ON, offset: {offset_hz} Hz");
+    Ok(())
+}
+
+async fn cmd_xit_get(rig: &dyn Rig) -> Result<()> {
+    let (enabled, offset) = rig.get_xit().await?;
+    let state = if enabled { "ON" } else { "OFF" };
+    println!("XIT: {state}, offset: {offset} Hz");
+    Ok(())
+}
+
+async fn cmd_xit_on(rig: &dyn Rig) -> Result<()> {
+    let (_enabled, offset) = rig.get_xit().await?;
+    rig.set_xit(true, offset).await?;
+    println!("XIT: ON, offset: {offset} Hz");
+    Ok(())
+}
+
+async fn cmd_xit_off(rig: &dyn Rig) -> Result<()> {
+    rig.set_xit(false, 0).await?;
+    println!("XIT: OFF");
+    Ok(())
+}
+
+async fn cmd_xit_set(rig: &dyn Rig, offset_hz: i32) -> Result<()> {
+    rig.set_xit(true, offset_hz).await?;
+    println!("XIT: ON, offset: {offset_hz} Hz");
+    Ok(())
+}
+
+async fn cmd_cw_send(rig: &dyn Rig, message: &str) -> Result<()> {
+    rig.send_cw_message(message).await?;
+    println!("CW message sent: {message}");
+    Ok(())
+}
+
+async fn cmd_cw_stop(rig: &dyn Rig) -> Result<()> {
+    rig.stop_cw_message().await?;
+    println!("CW message stopped");
+    Ok(())
+}
+
+async fn cmd_transceive_on(rig: &dyn Rig) -> Result<()> {
+    rig.enable_transceive().await?;
+    println!("Transceive: ON");
+    Ok(())
+}
+
+async fn cmd_transceive_off(rig: &dyn Rig) -> Result<()> {
+    rig.disable_transceive().await?;
+    println!("Transceive: OFF");
+    Ok(())
+}
+
 async fn cmd_monitor(rig: &dyn Rig, duration_secs: u64) -> Result<()> {
     let mut event_rx = rig.subscribe()?;
 
@@ -1216,8 +1589,38 @@ async fn cmd_monitor(rig: &dyn Rig, duration_secs: u64) -> Result<()> {
                 riglib::RigEvent::SwrReading { swr } => {
                     println!("[swr]   {swr:.2}:1");
                 }
-                _ => {
-                    println!("[event] {event:?}");
+                riglib::RigEvent::AgcChanged { receiver, mode } => {
+                    println!("[agc]   {receiver}: {mode}");
+                }
+                riglib::RigEvent::PreampChanged { receiver, level } => {
+                    println!("[preamp] {receiver}: {level}");
+                }
+                riglib::RigEvent::AttenuatorChanged { receiver, db } => {
+                    if *db == 0 {
+                        println!("[att]   {receiver}: OFF");
+                    } else {
+                        println!("[att]   {receiver}: {db} dB");
+                    }
+                }
+                riglib::RigEvent::CwSpeedChanged { wpm } => {
+                    println!("[speed] {wpm} WPM");
+                }
+                riglib::RigEvent::RitChanged { enabled, offset_hz } => {
+                    let state = if *enabled { "ON" } else { "OFF" };
+                    println!("[rit]   {state}, offset: {offset_hz} Hz");
+                }
+                riglib::RigEvent::XitChanged { enabled, offset_hz } => {
+                    let state = if *enabled { "ON" } else { "OFF" };
+                    println!("[xit]   {state}, offset: {offset_hz} Hz");
+                }
+                riglib::RigEvent::Connected => {
+                    println!("[conn]  connected");
+                }
+                riglib::RigEvent::Disconnected => {
+                    println!("[conn]  disconnected");
+                }
+                riglib::RigEvent::Reconnecting { attempt } => {
+                    println!("[conn]  reconnecting (attempt {attempt})");
                 }
             },
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
@@ -1800,6 +2203,46 @@ async fn main() -> Result<()> {
         Command::Key { action } => match action {
             KeyAction::On => cmd_key_on(rig.as_ref()).await,
             KeyAction::Off => cmd_key_off(rig.as_ref()).await,
+        },
+        Command::Speed { action } => match action {
+            SpeedAction::Get => cmd_speed_get(rig.as_ref()).await,
+            SpeedAction::Set { wpm } => cmd_speed_set(rig.as_ref(), *wpm).await,
+        },
+        Command::VfoEq { rx } => cmd_vfo_eq(rig.as_ref(), *rx).await,
+        Command::VfoSwap { rx } => cmd_vfo_swap(rig.as_ref(), *rx).await,
+        Command::Ant { action } => match action {
+            AntAction::Get { rx } => cmd_ant_get(rig.as_ref(), *rx).await,
+            AntAction::Set { port, rx } => cmd_ant_set(rig.as_ref(), *rx, port).await,
+        },
+        Command::Agc { action } => match action {
+            AgcAction::Get { rx } => cmd_agc_get(rig.as_ref(), *rx).await,
+            AgcAction::Set { mode, rx } => cmd_agc_set(rig.as_ref(), *rx, mode).await,
+        },
+        Command::Preamp { action } => match action {
+            PreampAction::Get { rx } => cmd_preamp_get(rig.as_ref(), *rx).await,
+            PreampAction::Set { level, rx } => cmd_preamp_set(rig.as_ref(), *rx, level).await,
+        },
+        Command::Att { action } => match action {
+            AttAction::Get { rx } => cmd_att_get(rig.as_ref(), *rx).await,
+            AttAction::Set { db, rx } => cmd_att_set(rig.as_ref(), *rx, *db).await,
+        },
+        Command::Rit { action } => match action {
+            RitAction::Get => cmd_rit_get(rig.as_ref()).await,
+            RitAction::On => cmd_rit_on(rig.as_ref()).await,
+            RitAction::Off => cmd_rit_off(rig.as_ref()).await,
+            RitAction::Set { offset_hz } => cmd_rit_set(rig.as_ref(), *offset_hz).await,
+        },
+        Command::Xit { action } => match action {
+            XitAction::Get => cmd_xit_get(rig.as_ref()).await,
+            XitAction::On => cmd_xit_on(rig.as_ref()).await,
+            XitAction::Off => cmd_xit_off(rig.as_ref()).await,
+            XitAction::Set { offset_hz } => cmd_xit_set(rig.as_ref(), *offset_hz).await,
+        },
+        Command::Cw { message } => cmd_cw_send(rig.as_ref(), message).await,
+        Command::CwStop => cmd_cw_stop(rig.as_ref()).await,
+        Command::Transceive { action } => match action {
+            TransceiveAction::On => cmd_transceive_on(rig.as_ref()).await,
+            TransceiveAction::Off => cmd_transceive_off(rig.as_ref()).await,
         },
         Command::Monitor { duration } => cmd_monitor(rig.as_ref(), *duration).await,
         Command::Stress { count, rx } => cmd_stress(rig.as_ref(), *count, *rx).await,
