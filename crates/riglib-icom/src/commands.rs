@@ -104,10 +104,10 @@ const CMD_RIT_XIT: u8 = 0x21;
 const CMD_SEND_CW_MESSAGE: u8 = 0x17;
 
 // Sub-command constants for CMD_RIT_XIT (0x21)
+// Icom uses a single shared offset register for both RIT and XIT.
+const SUB_RIT_XIT_OFFSET: u8 = 0x00;
 const SUB_RIT_ON_OFF: u8 = 0x01;
-const SUB_RIT_OFFSET: u8 = 0x02;
-const SUB_XIT_ON_OFF: u8 = 0x03;
-const SUB_XIT_OFFSET: u8 = 0x04;
+const SUB_XIT_ON_OFF: u8 = 0x02;
 
 // ---------------------------------------------------------------
 // CI-V mode byte mapping
@@ -501,44 +501,47 @@ pub fn cmd_set_rit_on(addr: u8, on: bool) -> Vec<u8> {
     )
 }
 
-/// Build a CI-V "read RIT offset" command.
+/// Build a CI-V "read RIT/XIT offset" command.
 ///
-/// Sends command 0x21 sub-command 0x02 with no data. The rig responds with
-/// a sign byte (0x00 = positive, 0x01 = negative) followed by 2 bytes of
-/// BCD-encoded magnitude (e.g., +150 Hz = `0x00 0x01 0x50`).
+/// Sends command 0x21 sub-command 0x00 with no data. Icom rigs have a single
+/// shared offset register for both RIT and XIT. The rig responds with 2 bytes
+/// of little-endian BCD magnitude followed by a sign byte.
+///
+/// Example: +150 Hz = `[0x50, 0x01, 0x00]` (LE-BCD `0150`, sign positive)
 pub fn cmd_read_rit_offset(addr: u8) -> Vec<u8> {
     encode_frame(
         addr,
         CONTROLLER_ADDR,
         CMD_RIT_XIT,
-        Some(SUB_RIT_OFFSET),
+        Some(SUB_RIT_XIT_OFFSET),
         &[],
     )
 }
 
-/// Build a CI-V "set RIT offset" command.
+/// Build a CI-V "set RIT/XIT offset" command.
 ///
-/// Sends command 0x21 sub-command 0x02 with a sign byte and 2-byte BCD
-/// magnitude. The offset range is typically +/-9999 Hz.
+/// Sends command 0x21 sub-command 0x00 with 2 bytes of little-endian BCD
+/// magnitude and a sign byte. The offset range is typically +/-9999 Hz.
+/// Icom rigs have a single shared offset register for both RIT and XIT.
 ///
 /// # Arguments
 ///
 /// * `addr` - CI-V address of the target rig
-/// * `offset_hz` - RIT offset in hertz (positive or negative)
+/// * `offset_hz` - RIT/XIT offset in hertz (positive or negative)
 pub fn cmd_set_rit_offset(addr: u8, offset_hz: i32) -> Vec<u8> {
     let data = encode_rit_xit_offset(offset_hz);
     encode_frame(
         addr,
         CONTROLLER_ADDR,
         CMD_RIT_XIT,
-        Some(SUB_RIT_OFFSET),
+        Some(SUB_RIT_XIT_OFFSET),
         &data,
     )
 }
 
 /// Build a CI-V "read XIT on/off" command.
 ///
-/// Sends command 0x21 sub-command 0x03 with no data. The rig responds with
+/// Sends command 0x21 sub-command 0x02 with no data. The rig responds with
 /// a single byte: 0x00 = off, 0x01 = on.
 pub fn cmd_read_xit_on(addr: u8) -> Vec<u8> {
     encode_frame(
@@ -552,7 +555,7 @@ pub fn cmd_read_xit_on(addr: u8) -> Vec<u8> {
 
 /// Build a CI-V "set XIT on/off" command.
 ///
-/// Sends command 0x21 sub-command 0x03 with data 0x01 (on) or 0x00 (off).
+/// Sends command 0x21 sub-command 0x02 with data 0x01 (on) or 0x00 (off).
 ///
 /// # Arguments
 ///
@@ -571,37 +574,23 @@ pub fn cmd_set_xit_on(addr: u8, on: bool) -> Vec<u8> {
 
 /// Build a CI-V "read XIT offset" command.
 ///
-/// Sends command 0x21 sub-command 0x04 with no data. The rig responds with
-/// a sign byte (0x00 = positive, 0x01 = negative) followed by 2 bytes of
-/// BCD-encoded magnitude.
+/// Reads the shared RIT/XIT offset. This is the same register as RIT offset
+/// (sub-command 0x00). Provided as a separate function for API clarity.
 pub fn cmd_read_xit_offset(addr: u8) -> Vec<u8> {
-    encode_frame(
-        addr,
-        CONTROLLER_ADDR,
-        CMD_RIT_XIT,
-        Some(SUB_XIT_OFFSET),
-        &[],
-    )
+    cmd_read_rit_offset(addr)
 }
 
 /// Build a CI-V "set XIT offset" command.
 ///
-/// Sends command 0x21 sub-command 0x04 with a sign byte and 2-byte BCD
-/// magnitude. The offset range is typically +/-9999 Hz.
+/// Sets the shared RIT/XIT offset. This is the same register as RIT offset
+/// (sub-command 0x00). Provided as a separate function for API clarity.
 ///
 /// # Arguments
 ///
 /// * `addr` - CI-V address of the target rig
-/// * `offset_hz` - XIT offset in hertz (positive or negative)
+/// * `offset_hz` - RIT/XIT offset in hertz (positive or negative)
 pub fn cmd_set_xit_offset(addr: u8, offset_hz: i32) -> Vec<u8> {
-    let data = encode_rit_xit_offset(offset_hz);
-    encode_frame(
-        addr,
-        CONTROLLER_ADDR,
-        CMD_RIT_XIT,
-        Some(SUB_XIT_OFFSET),
-        &data,
-    )
+    cmd_set_rit_offset(addr, offset_hz)
 }
 
 // ---------------------------------------------------------------
@@ -708,14 +697,14 @@ pub fn parse_xit_offset_response(data: &[u8]) -> Result<i32> {
 // RIT/XIT offset encoding/decoding helpers
 // ---------------------------------------------------------------
 
-/// Encode a signed RIT/XIT offset as a sign byte + 2-byte BCD magnitude.
+/// Encode a signed RIT/XIT offset as little-endian BCD + sign byte.
 ///
-/// The offset is clamped to +/-9999 Hz. The encoding is:
-/// - Byte 0: sign (0x00 = positive, 0x01 = negative)
+/// The offset is clamped to +/-9999 Hz. The CI-V encoding is:
+/// - Byte 0: low BCD byte (tens and ones digits)
 /// - Byte 1: high BCD byte (thousands and hundreds digits)
-/// - Byte 2: low BCD byte (tens and ones digits)
+/// - Byte 2: sign (0x00 = positive, 0x01 = negative)
 ///
-/// Example: +150 Hz = `[0x00, 0x01, 0x50]`, -300 Hz = `[0x01, 0x03, 0x00]`
+/// Example: +150 Hz = `[0x50, 0x01, 0x00]`, -300 Hz = `[0x00, 0x03, 0x01]`
 fn encode_rit_xit_offset(offset_hz: i32) -> [u8; 3] {
     let sign_byte: u8 = if offset_hz < 0 { 0x01 } else { 0x00 };
     let magnitude = offset_hz.unsigned_abs().min(9999);
@@ -728,12 +717,12 @@ fn encode_rit_xit_offset(offset_hz: i32) -> [u8; 3] {
     let bcd_hi = (thousands << 4) | hundreds;
     let bcd_lo = (tens << 4) | ones;
 
-    [sign_byte, bcd_hi, bcd_lo]
+    [bcd_lo, bcd_hi, sign_byte]
 }
 
 /// Parse a signed RIT/XIT offset from CI-V response data.
 ///
-/// Expects 3 bytes: sign byte + 2-byte BCD magnitude.
+/// Expects 3 bytes in little-endian BCD format: `[BCD_lo, BCD_hi, sign]`.
 fn parse_rit_xit_offset_response(data: &[u8], label: &str) -> Result<i32> {
     if data.len() != 3 {
         return Err(Error::Protocol(format!(
@@ -742,13 +731,11 @@ fn parse_rit_xit_offset_response(data: &[u8], label: &str) -> Result<i32> {
         )));
     }
 
-    let sign_byte = data[0];
-    let bcd_bytes = &data[1..3];
+    let lo = data[0];
+    let hi = data[1];
+    let sign_byte = data[2];
 
-    validate_bcd(bcd_bytes)?;
-
-    let hi = bcd_bytes[0];
-    let lo = bcd_bytes[1];
+    validate_bcd(&[lo, hi])?;
 
     let thousands = ((hi >> 4) & 0x0F) as i32;
     let hundreds = (hi & 0x0F) as i32;
@@ -2175,7 +2162,7 @@ mod tests {
                 IC7610_ADDR,
                 CONTROLLER_ADDR,
                 CMD_RIT_XIT,
-                SUB_RIT_OFFSET,
+                SUB_RIT_XIT_OFFSET,
                 0xFD
             ]
         );
@@ -2183,7 +2170,7 @@ mod tests {
 
     #[test]
     fn cmd_set_rit_offset_positive_150() {
-        // +150 Hz = sign 0x00, BCD 0150 => [0x01, 0x50]
+        // +150 Hz = LE-BCD [0x50, 0x01], sign 0x00
         let bytes = cmd_set_rit_offset(IC7610_ADDR, 150);
         assert_eq!(
             bytes,
@@ -2193,10 +2180,10 @@ mod tests {
                 IC7610_ADDR,
                 CONTROLLER_ADDR,
                 CMD_RIT_XIT,
-                SUB_RIT_OFFSET,
-                0x00,
-                0x01,
+                SUB_RIT_XIT_OFFSET,
                 0x50,
+                0x01,
+                0x00,
                 0xFD
             ]
         );
@@ -2204,7 +2191,7 @@ mod tests {
 
     #[test]
     fn cmd_set_rit_offset_negative_300() {
-        // -300 Hz = sign 0x01, BCD 0300 => [0x03, 0x00]
+        // -300 Hz = LE-BCD [0x00, 0x03], sign 0x01
         let bytes = cmd_set_rit_offset(IC7610_ADDR, -300);
         assert_eq!(
             bytes,
@@ -2214,10 +2201,10 @@ mod tests {
                 IC7610_ADDR,
                 CONTROLLER_ADDR,
                 CMD_RIT_XIT,
-                SUB_RIT_OFFSET,
-                0x01,
-                0x03,
+                SUB_RIT_XIT_OFFSET,
                 0x00,
+                0x03,
+                0x01,
                 0xFD
             ]
         );
@@ -2225,7 +2212,7 @@ mod tests {
 
     #[test]
     fn cmd_set_rit_offset_zero() {
-        // 0 Hz = sign 0x00, BCD 0000 => [0x00, 0x00]
+        // 0 Hz = LE-BCD [0x00, 0x00], sign 0x00
         let bytes = cmd_set_rit_offset(IC7610_ADDR, 0);
         assert_eq!(
             bytes,
@@ -2235,7 +2222,7 @@ mod tests {
                 IC7610_ADDR,
                 CONTROLLER_ADDR,
                 CMD_RIT_XIT,
-                SUB_RIT_OFFSET,
+                SUB_RIT_XIT_OFFSET,
                 0x00,
                 0x00,
                 0x00,
@@ -2246,7 +2233,7 @@ mod tests {
 
     #[test]
     fn cmd_set_rit_offset_max() {
-        // +9999 Hz = sign 0x00, BCD 9999 => [0x99, 0x99]
+        // +9999 Hz = LE-BCD [0x99, 0x99], sign 0x00
         let bytes = cmd_set_rit_offset(IC7610_ADDR, 9999);
         assert_eq!(
             bytes,
@@ -2256,10 +2243,10 @@ mod tests {
                 IC7610_ADDR,
                 CONTROLLER_ADDR,
                 CMD_RIT_XIT,
-                SUB_RIT_OFFSET,
+                SUB_RIT_XIT_OFFSET,
+                0x99,
+                0x99,
                 0x00,
-                0x99,
-                0x99,
                 0xFD
             ]
         );
@@ -2267,7 +2254,7 @@ mod tests {
 
     #[test]
     fn cmd_set_rit_offset_min() {
-        // -9999 Hz = sign 0x01, BCD 9999 => [0x99, 0x99]
+        // -9999 Hz = LE-BCD [0x99, 0x99], sign 0x01
         let bytes = cmd_set_rit_offset(IC7610_ADDR, -9999);
         assert_eq!(
             bytes,
@@ -2277,10 +2264,10 @@ mod tests {
                 IC7610_ADDR,
                 CONTROLLER_ADDR,
                 CMD_RIT_XIT,
-                SUB_RIT_OFFSET,
+                SUB_RIT_XIT_OFFSET,
+                0x99,
+                0x99,
                 0x01,
-                0x99,
-                0x99,
                 0xFD
             ]
         );
@@ -2340,61 +2327,24 @@ mod tests {
     }
 
     #[test]
-    fn cmd_read_xit_offset_bytes() {
-        let bytes = cmd_read_xit_offset(IC7610_ADDR);
+    fn cmd_read_xit_offset_same_as_rit() {
+        // XIT offset uses the same shared register as RIT (sub-command 0x00)
         assert_eq!(
-            bytes,
-            vec![
-                0xFE,
-                0xFE,
-                IC7610_ADDR,
-                CONTROLLER_ADDR,
-                CMD_RIT_XIT,
-                SUB_XIT_OFFSET,
-                0xFD
-            ]
+            cmd_read_xit_offset(IC7610_ADDR),
+            cmd_read_rit_offset(IC7610_ADDR)
         );
     }
 
     #[test]
-    fn cmd_set_xit_offset_positive_500() {
-        // +500 Hz = sign 0x00, BCD 0500 => [0x05, 0x00]
-        let bytes = cmd_set_xit_offset(IC7610_ADDR, 500);
+    fn cmd_set_xit_offset_same_as_rit() {
+        // XIT offset uses the same shared register as RIT (sub-command 0x00)
         assert_eq!(
-            bytes,
-            vec![
-                0xFE,
-                0xFE,
-                IC7610_ADDR,
-                CONTROLLER_ADDR,
-                CMD_RIT_XIT,
-                SUB_XIT_OFFSET,
-                0x00,
-                0x05,
-                0x00,
-                0xFD
-            ]
+            cmd_set_xit_offset(IC7610_ADDR, 500),
+            cmd_set_rit_offset(IC7610_ADDR, 500)
         );
-    }
-
-    #[test]
-    fn cmd_set_xit_offset_negative_1234() {
-        // -1234 Hz = sign 0x01, BCD 1234 => [0x12, 0x34]
-        let bytes = cmd_set_xit_offset(IC7610_ADDR, -1234);
         assert_eq!(
-            bytes,
-            vec![
-                0xFE,
-                0xFE,
-                IC7610_ADDR,
-                CONTROLLER_ADDR,
-                CMD_RIT_XIT,
-                SUB_XIT_OFFSET,
-                0x01,
-                0x12,
-                0x34,
-                0xFD
-            ]
+            cmd_set_xit_offset(IC7610_ADDR, -1234),
+            cmd_set_rit_offset(IC7610_ADDR, -1234)
         );
     }
 
@@ -2419,15 +2369,15 @@ mod tests {
 
     #[test]
     fn parse_rit_offset_positive_150() {
-        // sign=0x00 (positive), BCD 0150 => [0x01, 0x50]
-        let offset = parse_rit_offset_response(&[0x00, 0x01, 0x50]).unwrap();
+        // LE-BCD [0x50, 0x01], sign 0x00 (positive) => +150 Hz
+        let offset = parse_rit_offset_response(&[0x50, 0x01, 0x00]).unwrap();
         assert_eq!(offset, 150);
     }
 
     #[test]
     fn parse_rit_offset_negative_300() {
-        // sign=0x01 (negative), BCD 0300 => [0x03, 0x00]
-        let offset = parse_rit_offset_response(&[0x01, 0x03, 0x00]).unwrap();
+        // LE-BCD [0x00, 0x03], sign 0x01 (negative) => -300 Hz
+        let offset = parse_rit_offset_response(&[0x00, 0x03, 0x01]).unwrap();
         assert_eq!(offset, -300);
     }
 
@@ -2439,29 +2389,29 @@ mod tests {
 
     #[test]
     fn parse_rit_offset_max() {
-        // +9999 Hz
-        let offset = parse_rit_offset_response(&[0x00, 0x99, 0x99]).unwrap();
+        // +9999 Hz = LE-BCD [0x99, 0x99], sign 0x00
+        let offset = parse_rit_offset_response(&[0x99, 0x99, 0x00]).unwrap();
         assert_eq!(offset, 9999);
     }
 
     #[test]
     fn parse_rit_offset_min() {
-        // -9999 Hz
-        let offset = parse_rit_offset_response(&[0x01, 0x99, 0x99]).unwrap();
+        // -9999 Hz = LE-BCD [0x99, 0x99], sign 0x01
+        let offset = parse_rit_offset_response(&[0x99, 0x99, 0x01]).unwrap();
         assert_eq!(offset, -9999);
     }
 
     #[test]
     fn parse_rit_offset_wrong_length() {
-        assert!(parse_rit_offset_response(&[0x00, 0x01]).is_err());
-        assert!(parse_rit_offset_response(&[0x00, 0x01, 0x50, 0x00]).is_err());
+        assert!(parse_rit_offset_response(&[0x50, 0x01]).is_err());
+        assert!(parse_rit_offset_response(&[0x50, 0x01, 0x00, 0x00]).is_err());
         assert!(parse_rit_offset_response(&[]).is_err());
     }
 
     #[test]
     fn parse_rit_offset_invalid_bcd() {
         // 0xAB has invalid BCD digits
-        assert!(parse_rit_offset_response(&[0x00, 0xAB, 0x00]).is_err());
+        assert!(parse_rit_offset_response(&[0xAB, 0x00, 0x00]).is_err());
     }
 
     #[test]
@@ -2481,13 +2431,15 @@ mod tests {
 
     #[test]
     fn parse_xit_offset_positive_500() {
+        // LE-BCD [0x00, 0x05], sign 0x00 => +500 Hz
         let offset = parse_xit_offset_response(&[0x00, 0x05, 0x00]).unwrap();
         assert_eq!(offset, 500);
     }
 
     #[test]
     fn parse_xit_offset_negative_1234() {
-        let offset = parse_xit_offset_response(&[0x01, 0x12, 0x34]).unwrap();
+        // LE-BCD [0x34, 0x12], sign 0x01 => -1234 Hz
+        let offset = parse_xit_offset_response(&[0x34, 0x12, 0x01]).unwrap();
         assert_eq!(offset, -1234);
     }
 
@@ -2499,7 +2451,7 @@ mod tests {
 
     #[test]
     fn parse_xit_offset_invalid_bcd() {
-        assert!(parse_xit_offset_response(&[0x00, 0xF0, 0x00]).is_err());
+        assert!(parse_xit_offset_response(&[0xF0, 0x00, 0x00]).is_err());
     }
 
     // ---------------------------------------------------------------

@@ -1005,13 +1005,13 @@ impl Rig for IcomRig {
         };
         let enabled = commands::parse_rit_on_response(on_payload)?;
 
-        // Read RIT offset.
+        // Read shared RIT/XIT offset (sub-command 0x00).
         let offset_cmd = commands::cmd_read_rit_offset(self.civ_address);
         debug!("reading RIT offset");
         let offset_frame = self.execute_command(&offset_cmd).await?;
         let offset_data = Self::frame_payload(&offset_frame);
-        // Skip sub-command echo byte (0x02) if present.
-        let offset_payload = if offset_data.len() >= 2 && offset_data[0] == 0x02 {
+        // Skip sub-command echo byte (0x00) if present.
+        let offset_payload = if offset_data.len() >= 4 && offset_data[0] == 0x00 {
             &offset_data[1..]
         } else {
             &offset_data
@@ -1045,21 +1045,21 @@ impl Rig for IcomRig {
         debug!("reading XIT on/off");
         let on_frame = self.execute_command(&on_cmd).await?;
         let on_data = Self::frame_payload(&on_frame);
-        // Skip sub-command echo byte (0x03) if present.
-        let on_payload = if on_data.len() >= 2 && on_data[0] == 0x03 {
+        // Skip sub-command echo byte (0x02) if present.
+        let on_payload = if on_data.len() >= 2 && on_data[0] == 0x02 {
             &on_data[1..]
         } else {
             &on_data
         };
         let enabled = commands::parse_xit_on_response(on_payload)?;
 
-        // Read XIT offset.
+        // Read shared RIT/XIT offset (sub-command 0x00 — same register as RIT).
         let offset_cmd = commands::cmd_read_xit_offset(self.civ_address);
         debug!("reading XIT offset");
         let offset_frame = self.execute_command(&offset_cmd).await?;
         let offset_data = Self::frame_payload(&offset_frame);
-        // Skip sub-command echo byte (0x04) if present.
-        let offset_payload = if offset_data.len() >= 2 && offset_data[0] == 0x04 {
+        // Skip sub-command echo byte (0x00) if present.
+        let offset_payload = if offset_data.len() >= 4 && offset_data[0] == 0x00 {
             &offset_data[1..]
         } else {
             &offset_data
@@ -1994,14 +1994,14 @@ mod tests {
         mock.expect(&on_cmd, &echo_and_response(&on_cmd, &on_response));
 
         // Read RIT offset: rig responds with +150 Hz
-        // sign=0x00 (positive), BCD 0150 => [0x01, 0x50]
+        // LE-BCD [0x50, 0x01], sign 0x00 (positive)
         let offset_cmd = commands::cmd_read_rit_offset(IC7610_ADDR);
         let offset_response = civ::encode_frame(
             CONTROLLER_ADDR,
             IC7610_ADDR,
             0x21,
-            Some(0x02),
-            &[0x00, 0x01, 0x50],
+            Some(0x00),
+            &[0x50, 0x01, 0x00],
         );
         mock.expect(
             &offset_cmd,
@@ -2063,16 +2063,17 @@ mod tests {
         // Read XIT on/off: rig responds with XIT off (0x00)
         let on_cmd = commands::cmd_read_xit_on(IC7610_ADDR);
         let on_response =
-            civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x21, Some(0x03), &[0x00]);
+            civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x21, Some(0x02), &[0x00]);
         mock.expect(&on_cmd, &echo_and_response(&on_cmd, &on_response));
 
         // Read XIT offset: rig responds with +500 Hz
+        // LE-BCD [0x00, 0x05], sign 0x00 (positive)
         let offset_cmd = commands::cmd_read_xit_offset(IC7610_ADDR);
         let offset_response = civ::encode_frame(
             CONTROLLER_ADDR,
             IC7610_ADDR,
             0x21,
-            Some(0x04),
+            Some(0x00),
             &[0x00, 0x05, 0x00],
         );
         mock.expect(

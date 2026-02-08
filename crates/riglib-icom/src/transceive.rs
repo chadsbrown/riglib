@@ -462,8 +462,8 @@ fn process_single_transceive_frame(
             }
         },
         CMD_TRANSCEIVE_RIT_XIT => {
-            // payload[0] = sub-command: 0x01=RIT on/off, 0x02=RIT offset,
-            //                           0x03=XIT on/off, 0x04=XIT offset
+            // payload[0] = sub-command: 0x00=shared RIT/XIT offset,
+            //                           0x01=RIT on/off, 0x02=XIT on/off
             if payload.is_empty() {
                 debug!("empty RIT/XIT transceive frame, ignoring");
                 return;
@@ -471,6 +471,19 @@ fn process_single_transceive_frame(
             let sub_cmd = payload[0];
             let data = &payload[1..];
             match sub_cmd {
+                0x00 => {
+                    // Shared RIT/XIT offset (emit as RitChanged; same register)
+                    match commands::parse_rit_offset_response(data) {
+                        Ok(offset_hz) => {
+                            debug!(offset_hz, "transceive RIT/XIT offset update");
+                            let _ = event_tx.send(RigEvent::RitChanged {
+                                enabled: true,
+                                offset_hz,
+                            });
+                        }
+                        Err(e) => debug!(?e, "failed to parse transceive RIT/XIT offset"),
+                    }
+                }
                 0x01 => {
                     // RIT on/off
                     match commands::parse_rit_on_response(data) {
@@ -485,19 +498,6 @@ fn process_single_transceive_frame(
                     }
                 }
                 0x02 => {
-                    // RIT offset
-                    match commands::parse_rit_offset_response(data) {
-                        Ok(offset_hz) => {
-                            debug!(offset_hz, "transceive RIT offset update");
-                            let _ = event_tx.send(RigEvent::RitChanged {
-                                enabled: true,
-                                offset_hz,
-                            });
-                        }
-                        Err(e) => debug!(?e, "failed to parse transceive RIT offset"),
-                    }
-                }
-                0x03 => {
                     // XIT on/off
                     match commands::parse_xit_on_response(data) {
                         Ok(enabled) => {
@@ -508,19 +508,6 @@ fn process_single_transceive_frame(
                             });
                         }
                         Err(e) => debug!(?e, "failed to parse transceive XIT on/off"),
-                    }
-                }
-                0x04 => {
-                    // XIT offset
-                    match commands::parse_xit_offset_response(data) {
-                        Ok(offset_hz) => {
-                            debug!(offset_hz, "transceive XIT offset update");
-                            let _ = event_tx.send(RigEvent::XitChanged {
-                                enabled: true,
-                                offset_hz,
-                            });
-                        }
-                        Err(e) => debug!(?e, "failed to parse transceive XIT offset"),
                     }
                 }
                 _ => {
@@ -791,14 +778,14 @@ mod tests {
     fn test_process_rit_offset_frame() {
         let (event_tx, mut event_rx) = broadcast::channel(16);
 
-        // Build a transceive RIT offset frame: cmd 0x21, sub_cmd 0x02,
-        // data [0x00, 0x01, 0x50] (+150 Hz)
+        // Build a transceive RIT/XIT offset frame: cmd 0x21, sub_cmd 0x00,
+        // LE-BCD [0x50, 0x01], sign 0x00 (+150 Hz)
         let frame_bytes = encode_frame(
             BROADCAST_ADDR,
             IC7610_ADDR,
             CMD_TRANSCEIVE_RIT_XIT,
-            Some(0x02),
-            &[0x00, 0x01, 0x50],
+            Some(0x00),
+            &[0x50, 0x01, 0x00],
         );
 
         let mut buf = frame_bytes;
@@ -819,12 +806,12 @@ mod tests {
     fn test_process_xit_on_frame() {
         let (event_tx, mut event_rx) = broadcast::channel(16);
 
-        // Build a transceive XIT on/off frame: cmd 0x21, sub_cmd 0x03, data [0x01] (XIT on)
+        // Build a transceive XIT on/off frame: cmd 0x21, sub_cmd 0x02, data [0x01] (XIT on)
         let frame_bytes = encode_frame(
             BROADCAST_ADDR,
             IC7610_ADDR,
             CMD_TRANSCEIVE_RIT_XIT,
-            Some(0x03),
+            Some(0x02),
             &[0x01],
         );
 
