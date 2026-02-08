@@ -42,7 +42,6 @@ use riglib::{
     AgcMode, AntennaPort, AudioCapable, KeyLine, Mode, PreampLevel, PttMethod, ReceiverId, Rig,
 };
 use riglib_test_harness::MockTransport;
-use riglib_transport::SerialTransport;
 use riglib_transport::audio::list_audio_devices;
 
 // ---------------------------------------------------------------------------
@@ -947,18 +946,10 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
                     .port
                     .as_deref()
                     .context("--port is required when not using --mock")?;
-                let baud = cli.baud.unwrap_or(model.default_baud_rate);
-
-                let transport = SerialTransport::open(port, baud)
-                    .await
-                    .with_context(|| format!("failed to open serial port {port} at {baud} baud"))?;
-
-                if let Some(p) = &cli.port {
-                    builder = builder.serial_port(p);
-                }
 
                 let rig = builder
-                    .build_with_transport(Box::new(transport))
+                    .serial_port(port)
+                    .build()
                     .await
                     .context("failed to build IcomRig")?;
 
@@ -967,8 +958,8 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
                 rig.enable_transceive().await?;
 
                 println!(
-                    "Connected to {port} at {baud} baud -- Icom {} (transceive enabled)",
-                    model.name
+                    "Connected to {} -- Icom {} (transceive enabled)",
+                    port, model.name
                 );
                 Ok(Box::new(rig))
             }
@@ -1002,19 +993,14 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
                     .port
                     .as_deref()
                     .context("--port is required when not using --mock")?;
-                let baud = cli.baud.unwrap_or(model.default_baud_rate);
-
-                let transport = SerialTransport::open(port, baud)
-                    .await
-                    .with_context(|| format!("failed to open serial port {port} at {baud} baud"))?;
-
-                builder = builder.serial_port(port);
 
                 let rig = builder
-                    .build_with_transport(Box::new(transport))
+                    .serial_port(port)
+                    .build()
+                    .await
                     .context("failed to build YaesuRig")?;
 
-                println!("Connected to {port} at {baud} baud -- Yaesu {}", model.name);
+                println!("Connected to {} -- Yaesu {}", port, model.name);
                 Ok(Box::new(rig))
             }
         }
@@ -1048,23 +1034,14 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
                     .port
                     .as_deref()
                     .context("--port is required when not using --mock")?;
-                let baud = cli.baud.unwrap_or(model.default_baud_rate);
-
-                let transport = SerialTransport::open(port, baud)
-                    .await
-                    .with_context(|| format!("failed to open serial port {port} at {baud} baud"))?;
-
-                builder = builder.serial_port(port);
 
                 let rig = builder
-                    .build_with_transport(Box::new(transport))
+                    .serial_port(port)
+                    .build()
                     .await
                     .context("failed to build KenwoodRig")?;
 
-                println!(
-                    "Connected to {port} at {baud} baud -- Kenwood {}",
-                    model.name
-                );
+                println!("Connected to {} -- Kenwood {}", port, model.name);
                 Ok(Box::new(rig))
             }
         }
@@ -1098,23 +1075,14 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
                     .port
                     .as_deref()
                     .context("--port is required when not using --mock")?;
-                let baud = cli.baud.unwrap_or(model.default_baud_rate);
-
-                let transport = SerialTransport::open(port, baud)
-                    .await
-                    .with_context(|| format!("failed to open serial port {port} at {baud} baud"))?;
-
-                builder = builder.serial_port(port);
 
                 let rig = builder
-                    .build_with_transport(Box::new(transport))
+                    .serial_port(port)
+                    .build()
                     .await
                     .context("failed to build ElecraftRig")?;
 
-                println!(
-                    "Connected to {port} at {baud} baud -- Elecraft {}",
-                    model.name
-                );
+                println!("Connected to {} -- Elecraft {}", port, model.name);
                 Ok(Box::new(rig))
             }
         }
