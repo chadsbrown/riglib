@@ -247,13 +247,13 @@ pub fn cmd_read_preamp() -> Vec<u8> {
     encode_command("PA0", "")
 }
 
-/// Build a "set preamp" command (`PA0{level:02};`).
+/// Build a "set preamp" command (`PA0{level};`).
 ///
 /// # Arguments
 ///
 /// * `level` - Preamp level: 0=Off, 1=Amp1, 2=Amp2
 pub fn cmd_set_preamp(level: u8) -> Vec<u8> {
-    encode_command("PA0", &format!("{level:02}"))
+    encode_command("PA0", &format!("{level}"))
 }
 
 /// Build a "read attenuator" command (`RA0;`).
@@ -264,13 +264,13 @@ pub fn cmd_read_attenuator() -> Vec<u8> {
     encode_command("RA0", "")
 }
 
-/// Build a "set attenuator" command (`RA0{level:02};`).
+/// Build a "set attenuator" command (`RA0{level};`).
 ///
 /// # Arguments
 ///
 /// * `level` - Attenuator level: 0=Off, 1=On
 pub fn cmd_set_attenuator(level: u8) -> Vec<u8> {
-    encode_command("RA0", &format!("{level:02}"))
+    encode_command("RA0", &format!("{level}"))
 }
 
 /// Build a "read split state" command (`FT;`).
@@ -1142,17 +1142,17 @@ mod tests {
 
     #[test]
     fn cmd_set_preamp_off() {
-        assert_eq!(cmd_set_preamp(0), b"PA000;");
+        assert_eq!(cmd_set_preamp(0), b"PA00;");
     }
 
     #[test]
     fn cmd_set_preamp_amp1() {
-        assert_eq!(cmd_set_preamp(1), b"PA001;");
+        assert_eq!(cmd_set_preamp(1), b"PA01;");
     }
 
     #[test]
     fn cmd_set_preamp_amp2() {
-        assert_eq!(cmd_set_preamp(2), b"PA002;");
+        assert_eq!(cmd_set_preamp(2), b"PA02;");
     }
 
     #[test]
@@ -1194,12 +1194,12 @@ mod tests {
 
     #[test]
     fn cmd_set_attenuator_off() {
-        assert_eq!(cmd_set_attenuator(0), b"RA000;");
+        assert_eq!(cmd_set_attenuator(0), b"RA00;");
     }
 
     #[test]
     fn cmd_set_attenuator_on() {
-        assert_eq!(cmd_set_attenuator(1), b"RA001;");
+        assert_eq!(cmd_set_attenuator(1), b"RA01;");
     }
 
     #[test]
