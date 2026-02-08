@@ -27,7 +27,10 @@
 //! | IC-7410    | `0x80` | 19200   | 100W  | HF + 6m            |
 //! | IC-905     | `0xAC` | 115200  | 10W   | VHF/UHF/SHF        |
 
-use riglib_core::{BandRange, ConnectionType, Manufacturer, Mode, RigCapabilities, RigDefinition};
+use riglib_core::{
+    AgcMode, AntennaPort, BandRange, ConnectionType, Manufacturer, Mode, PreampLevel,
+    RigCapabilities, RigDefinition,
+};
 
 /// Static model definition for an Icom transceiver.
 ///
@@ -154,10 +157,17 @@ pub fn ic_7600() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1, PreampLevel::Preamp2],
+            attenuator_levels: vec![0, 6, 12, 18],
+            antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -192,10 +202,22 @@ pub fn ic_7700() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 200.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1, PreampLevel::Preamp2],
+            attenuator_levels: vec![0, 6, 12, 18],
+            antenna_ports: vec![
+                AntennaPort::Ant1,
+                AntennaPort::Ant2,
+                AntennaPort::Ant3,
+                AntennaPort::Ant4,
+            ],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -229,10 +251,22 @@ pub fn ic_7800() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 200.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1, PreampLevel::Preamp2],
+            attenuator_levels: vec![0, 3, 6, 9, 12, 15, 18, 21],
+            antenna_ports: vec![
+                AntennaPort::Ant1,
+                AntennaPort::Ant2,
+                AntennaPort::Ant3,
+                AntennaPort::Ant4,
+            ],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -268,10 +302,22 @@ pub fn ic_7850() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 200.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1, PreampLevel::Preamp2],
+            attenuator_levels: vec![0, 3, 6, 9, 12, 15, 18, 21],
+            antenna_ports: vec![
+                AntennaPort::Ant1,
+                AntennaPort::Ant2,
+                AntennaPort::Ant3,
+                AntennaPort::Ant4,
+            ],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -306,10 +352,22 @@ pub fn ic_7851() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 200.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1, PreampLevel::Preamp2],
+            attenuator_levels: vec![0, 3, 6, 9, 12, 15, 18, 21],
+            antenna_ports: vec![
+                AntennaPort::Ant1,
+                AntennaPort::Ant2,
+                AntennaPort::Ant3,
+                AntennaPort::Ant4,
+            ],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -346,10 +404,17 @@ pub fn ic_7300() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 20],
+            antenna_ports: vec![AntennaPort::Ant1],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -403,10 +468,17 @@ pub fn ic_7610() -> IcomModel {
                 BandRange::new(1_800_000, 54_000_000),
             ],
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1, PreampLevel::Preamp2],
+            attenuator_levels: vec![0, 6, 12, 18],
+            antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -446,10 +518,17 @@ pub fn ic_9700() -> IcomModel {
             ],
             // Max power on the highest-power band (VHF).
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 10],
+            antenna_ports: vec![AntennaPort::Ant1],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -489,10 +568,17 @@ pub fn ic_705() -> IcomModel {
                 BandRange::new(420_000_000, 450_000_000),
             ],
             max_power_watts: 10.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 20],
+            antenna_ports: vec![AntennaPort::Ant1],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -527,10 +613,17 @@ pub fn ic_7300mk2() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 20],
+            antenna_ports: vec![AntennaPort::Ant1],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -571,10 +664,17 @@ pub fn ic_7100() -> IcomModel {
             ],
             // Max power on HF/6m band.
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 20],
+            antenna_ports: vec![AntennaPort::Ant1],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -613,10 +713,17 @@ pub fn ic_9100() -> IcomModel {
                 BandRange::new(420_000_000, 450_000_000),
             ],
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 20],
+            antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -651,10 +758,17 @@ pub fn ic_7410() -> IcomModel {
             supported_modes: hf_modes(),
             frequency_ranges: hf_6m_ranges(),
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 6, 12, 18],
+            antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -696,10 +810,17 @@ pub fn ic_905() -> IcomModel {
                 BandRange::new(5_650_000_000, 5_850_000_000),
             ],
             max_power_watts: 10.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 20],
+            antenna_ports: vec![AntennaPort::Ant1],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
     }
 }
@@ -1333,16 +1454,8 @@ mod tests {
     #[test]
     fn all_models_have_rit_xit() {
         for model in all_icom_models() {
-            assert!(
-                model.capabilities.has_rit,
-                "{} should have RIT",
-                model.name
-            );
-            assert!(
-                model.capabilities.has_xit,
-                "{} should have XIT",
-                model.name
-            );
+            assert!(model.capabilities.has_rit, "{} should have RIT", model.name);
+            assert!(model.capabilities.has_xit, "{} should have XIT", model.name);
         }
     }
 

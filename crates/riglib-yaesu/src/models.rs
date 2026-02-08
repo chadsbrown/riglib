@@ -10,7 +10,10 @@
 //! configurable in the rig's menu, but the defaults listed here are the
 //! factory settings for USB virtual COM port operation.
 
-use riglib_core::{BandRange, ConnectionType, Manufacturer, Mode, RigCapabilities, RigDefinition};
+use riglib_core::{
+    AgcMode, AntennaPort, BandRange, ConnectionType, Manufacturer, Mode, PreampLevel,
+    RigCapabilities, RigDefinition,
+};
 
 /// Static model definition for a Yaesu transceiver.
 ///
@@ -110,8 +113,15 @@ pub fn ft_dx10() -> YaesuModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 6, 12, 18],
+            antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
         has_dual_vfo: true,
         has_preamp2: false,
@@ -146,8 +156,15 @@ pub fn ft_891() -> YaesuModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![],
+            antenna_ports: vec![AntennaPort::Ant1],
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
         has_dual_vfo: true,
         has_preamp2: false,
@@ -188,8 +205,15 @@ pub fn ft_991a() -> YaesuModel {
                 BandRange::new(420_000_000, 450_000_000),
             ],
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 6, 12, 18],
+            antenna_ports: vec![AntennaPort::Ant1],
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
         has_dual_vfo: true,
         has_preamp2: false,
@@ -224,8 +248,15 @@ pub fn ft_dx101d() -> YaesuModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1, PreampLevel::Preamp2],
+            attenuator_levels: vec![0, 6, 12, 18],
+            antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
         has_dual_vfo: true,
         has_preamp2: true,
@@ -259,8 +290,15 @@ pub fn ft_dx101mp() -> YaesuModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 200.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1, PreampLevel::Preamp2],
+            attenuator_levels: vec![0, 6, 12, 18],
+            antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
         has_dual_vfo: true,
         has_preamp2: true,
@@ -294,8 +332,15 @@ pub fn ft_710() -> YaesuModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 6, 12, 18],
+            antenna_ports: vec![AntennaPort::Ant1],
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
         has_dual_vfo: true,
         has_preamp2: false,

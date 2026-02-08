@@ -176,7 +176,7 @@ impl YaesuRig {
         {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(Error::NotConnected), // oneshot sender dropped
-            Err(_) => Err(Error::Timeout),           // overall timeout
+            Err(_) => Err(Error::Timeout),          // overall timeout
         }
     }
 
@@ -597,12 +597,13 @@ impl Rig for YaesuRig {
             other => {
                 return Err(Error::Protocol(format!(
                     "unknown Yaesu AGC mode value: {other}"
-                )))
+                )));
             }
         };
-        let _ = self
-            .event_tx
-            .send(RigEvent::AgcChanged { receiver: _rx, mode });
+        let _ = self.event_tx.send(RigEvent::AgcChanged {
+            receiver: _rx,
+            mode,
+        });
         Ok(mode)
     }
 
@@ -616,9 +617,10 @@ impl Rig for YaesuRig {
         let cmd = commands::cmd_set_agc(value);
         debug!(?mode, "setting AGC mode");
         let _response = self.execute_command(&cmd).await?;
-        let _ = self
-            .event_tx
-            .send(RigEvent::AgcChanged { receiver: _rx, mode });
+        let _ = self.event_tx.send(RigEvent::AgcChanged {
+            receiver: _rx,
+            mode,
+        });
         Ok(())
     }
 
@@ -635,13 +637,14 @@ impl Rig for YaesuRig {
             other => {
                 return Err(Error::Protocol(format!(
                     "unknown Yaesu preamp level value: {other}"
-                )))
+                )));
             }
         };
 
-        let _ = self
-            .event_tx
-            .send(RigEvent::PreampChanged { receiver: rx, level });
+        let _ = self.event_tx.send(RigEvent::PreampChanged {
+            receiver: rx,
+            level,
+        });
         Ok(level)
     }
 
@@ -663,48 +666,54 @@ impl Rig for YaesuRig {
         debug!(receiver = %rx, %level, "setting preamp level");
         let _response = self.execute_command(&cmd).await?;
 
-        let _ = self
-            .event_tx
-            .send(RigEvent::PreampChanged { receiver: rx, level });
+        let _ = self.event_tx.send(RigEvent::PreampChanged {
+            receiver: rx,
+            level,
+        });
         Ok(())
     }
 
-    async fn get_attenuator(&self, rx: ReceiverId) -> Result<AttenuatorLevel> {
+    async fn get_attenuator(&self, rx: ReceiverId) -> Result<u8> {
         let cmd = commands::cmd_read_attenuator();
         debug!(receiver = %rx, "reading attenuator level");
         let (_prefix, data) = self.execute_command(&cmd).await?;
         let raw = commands::parse_attenuator_response(&data)?;
 
-        // Yaesu attenuator is binary: 0 = off, 1 = on (~12 dB).
-        let level = if raw == 0 {
-            AttenuatorLevel::Off
+        // Yaesu CAT attenuator: 0 = off, 1 = on.
+        // Map to dB using the rig's capabilities. For rigs with
+        // attenuator_levels [0, 6, 12, 18] a simple on/off maps to
+        // the first non-zero step (6 dB). If capabilities are empty,
+        // fall back to 0 dB.
+        let db = if raw == 0 {
+            0
         } else {
-            AttenuatorLevel::Db12
+            // Use the first non-zero dB step from capabilities, or default to 6.
+            self.model
+                .capabilities
+                .attenuator_levels
+                .iter()
+                .copied()
+                .find(|&v| v > 0)
+                .unwrap_or(6)
         };
 
-        let _ = self.event_tx.send(RigEvent::AttenuatorChanged {
-            receiver: rx,
-            level,
-        });
-        Ok(level)
+        let _ = self
+            .event_tx
+            .send(RigEvent::AttenuatorChanged { receiver: rx, db });
+        Ok(db)
     }
 
-    async fn set_attenuator(&self, rx: ReceiverId, level: AttenuatorLevel) -> Result<()> {
-        // Yaesu attenuator is binary on/off (~12 dB). Any non-Off level maps to 1.
-        let value = match level {
-            AttenuatorLevel::Off => 0,
-            _ => 1,
-        };
+    async fn set_attenuator(&self, rx: ReceiverId, db: u8) -> Result<()> {
+        // Yaesu CAT attenuator is binary on/off. 0 dB = off, any other = on.
+        let value: u8 = if db == 0 { 0 } else { 1 };
 
         let cmd = commands::cmd_set_attenuator(value);
-        debug!(receiver = %rx, %level, "setting attenuator level");
+        debug!(receiver = %rx, db, "setting attenuator");
         let _response = self.execute_command(&cmd).await?;
 
-        // Emit the level the user requested, not the mapped binary value.
-        let _ = self.event_tx.send(RigEvent::AttenuatorChanged {
-            receiver: rx,
-            level,
-        });
+        let _ = self
+            .event_tx
+            .send(RigEvent::AttenuatorChanged { receiver: rx, db });
         Ok(())
     }
 
@@ -713,7 +722,9 @@ impl Rig for YaesuRig {
         debug!("reading RIT state");
         let (_prefix, data) = self.execute_command(&cmd).await?;
         let (enabled, offset_hz) = commands::parse_rit_response(&data)?;
-        let _ = self.event_tx.send(RigEvent::RitChanged { enabled, offset_hz });
+        let _ = self
+            .event_tx
+            .send(RigEvent::RitChanged { enabled, offset_hz });
         Ok((enabled, offset_hz))
     }
 
@@ -737,7 +748,9 @@ impl Rig for YaesuRig {
             let _response = self.execute_command(&offset_cmd).await?;
         }
 
-        let _ = self.event_tx.send(RigEvent::RitChanged { enabled, offset_hz });
+        let _ = self
+            .event_tx
+            .send(RigEvent::RitChanged { enabled, offset_hz });
         Ok(())
     }
 
@@ -746,7 +759,9 @@ impl Rig for YaesuRig {
         debug!("reading XIT state");
         let (_prefix, data) = self.execute_command(&cmd).await?;
         let (enabled, offset_hz) = commands::parse_xit_response(&data)?;
-        let _ = self.event_tx.send(RigEvent::XitChanged { enabled, offset_hz });
+        let _ = self
+            .event_tx
+            .send(RigEvent::XitChanged { enabled, offset_hz });
         Ok((enabled, offset_hz))
     }
 
@@ -769,7 +784,9 @@ impl Rig for YaesuRig {
             let _response = self.execute_command(&offset_cmd).await?;
         }
 
-        let _ = self.event_tx.send(RigEvent::XitChanged { enabled, offset_hz });
+        let _ = self
+            .event_tx
+            .send(RigEvent::XitChanged { enabled, offset_hz });
         Ok(())
     }
 
@@ -824,7 +841,11 @@ impl Rig for YaesuRig {
         let chars: Vec<char> = message.chars().collect();
         let chunks: Vec<String> = chars.chunks(24).map(|c| c.iter().collect()).collect();
 
-        debug!(message_len = message.len(), num_chunks = chunks.len(), "sending CW message");
+        debug!(
+            message_len = message.len(),
+            num_chunks = chunks.len(),
+            "sending CW message"
+        );
 
         for (i, chunk) in chunks.iter().enumerate() {
             // Poll the buffer status before sending each chunk.
@@ -1531,9 +1552,7 @@ mod tests {
         mock.expect(&set_cmd, b"GT03;");
 
         let rig = make_test_rig(mock);
-        rig.set_agc(ReceiverId::VFO_A, AgcMode::Slow)
-            .await
-            .unwrap();
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Slow).await.unwrap();
     }
 
     #[tokio::test]
@@ -1545,9 +1564,7 @@ mod tests {
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();
 
-        rig.set_agc(ReceiverId::VFO_A, AgcMode::Fast)
-            .await
-            .unwrap();
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Fast).await.unwrap();
 
         let event = event_rx.try_recv().unwrap();
         match event {
@@ -1710,8 +1727,8 @@ mod tests {
         mock.expect(&read_cmd, b"RA000;");
 
         let rig = make_test_rig(mock);
-        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
-        assert_eq!(level, AttenuatorLevel::Off);
+        let db = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(db, 0);
     }
 
     #[tokio::test]
@@ -1721,9 +1738,9 @@ mod tests {
         mock.expect(&read_cmd, b"RA001;");
 
         let rig = make_test_rig(mock);
-        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
-        // Yaesu on (01) maps to Db12
-        assert_eq!(level, AttenuatorLevel::Db12);
+        let db = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        // Yaesu on (01) maps to first non-zero dB step from capabilities (6)
+        assert_eq!(db, 6);
     }
 
     #[tokio::test]
@@ -1733,48 +1750,29 @@ mod tests {
         mock.expect(&set_cmd, b"RA000;");
 
         let rig = make_test_rig(mock);
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Off)
-            .await
-            .unwrap();
+        rig.set_attenuator(ReceiverId::VFO_A, 0).await.unwrap();
     }
 
     #[tokio::test]
-    async fn test_set_attenuator_db12() {
+    async fn test_set_attenuator_6db() {
         let mut mock = MockTransport::new();
-        // Db12 maps to value 1 on Yaesu
+        // Any non-zero dB maps to value 1 on Yaesu (binary attenuator)
         let set_cmd = commands::cmd_set_attenuator(1);
         mock.expect(&set_cmd, b"RA001;");
 
         let rig = make_test_rig(mock);
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db12)
-            .await
-            .unwrap();
+        rig.set_attenuator(ReceiverId::VFO_A, 6).await.unwrap();
     }
 
     #[tokio::test]
-    async fn test_set_attenuator_db6_maps_to_on() {
+    async fn test_set_attenuator_18db() {
         let mut mock = MockTransport::new();
-        // Any non-Off level maps to 1 on Yaesu (binary attenuator)
+        // Any non-zero dB maps to 1 on Yaesu
         let set_cmd = commands::cmd_set_attenuator(1);
         mock.expect(&set_cmd, b"RA001;");
 
         let rig = make_test_rig(mock);
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db6)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_set_attenuator_db18_maps_to_on() {
-        let mut mock = MockTransport::new();
-        // Db18 also maps to 1 on Yaesu
-        let set_cmd = commands::cmd_set_attenuator(1);
-        mock.expect(&set_cmd, b"RA001;");
-
-        let rig = make_test_rig(mock);
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db18)
-            .await
-            .unwrap();
+        rig.set_attenuator(ReceiverId::VFO_A, 18).await.unwrap();
     }
 
     #[tokio::test]
@@ -1786,14 +1784,14 @@ mod tests {
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();
 
-        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
-        assert_eq!(level, AttenuatorLevel::Db12);
+        let db = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(db, 6);
 
         let event = event_rx.try_recv().unwrap();
         match event {
-            RigEvent::AttenuatorChanged { receiver, level } => {
+            RigEvent::AttenuatorChanged { receiver, db } => {
                 assert_eq!(receiver, ReceiverId::VFO_A);
-                assert_eq!(level, AttenuatorLevel::Db12);
+                assert_eq!(db, 6);
             }
             other => panic!("expected AttenuatorChanged, got {other:?}"),
         }
@@ -1808,16 +1806,13 @@ mod tests {
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();
 
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db18)
-            .await
-            .unwrap();
+        rig.set_attenuator(ReceiverId::VFO_A, 18).await.unwrap();
 
         let event = event_rx.try_recv().unwrap();
         match event {
-            RigEvent::AttenuatorChanged { receiver, level } => {
+            RigEvent::AttenuatorChanged { receiver, db } => {
                 assert_eq!(receiver, ReceiverId::VFO_A);
-                // Event should emit the user-requested level, not the mapped binary
-                assert_eq!(level, AttenuatorLevel::Db18);
+                assert_eq!(db, 18);
             }
             other => panic!("expected AttenuatorChanged, got {other:?}"),
         }

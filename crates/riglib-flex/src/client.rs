@@ -1265,11 +1265,7 @@ mod tests {
         // Verify RitChanged event was emitted.
         let mut found_rit_change = false;
         while let Ok(event) = rx.try_recv() {
-            if let RigEvent::RitChanged {
-                enabled,
-                offset_hz,
-            } = event
-            {
+            if let RigEvent::RitChanged { enabled, offset_hz } = event {
                 assert!(enabled);
                 assert_eq!(offset_hz, 150);
                 found_rit_change = true;

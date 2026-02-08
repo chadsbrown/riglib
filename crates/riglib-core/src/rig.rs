@@ -184,19 +184,20 @@ pub trait Rig: Send + Sync {
         ))
     }
 
-    /// Get the current attenuator level for a receiver.
-    async fn get_attenuator(&self, _receiver: ReceiverId) -> Result<AttenuatorLevel> {
+    /// Get the current attenuator level for a receiver in dB.
+    ///
+    /// Returns `0` when the attenuator is off.
+    async fn get_attenuator(&self, _receiver: ReceiverId) -> Result<u8> {
         Err(crate::error::Error::Unsupported(
             "attenuator control not supported".into(),
         ))
     }
 
-    /// Set the attenuator level for a receiver.
-    async fn set_attenuator(
-        &self,
-        _receiver: ReceiverId,
-        _level: AttenuatorLevel,
-    ) -> Result<()> {
+    /// Set the attenuator level for a receiver in dB.
+    ///
+    /// Pass `0` to turn the attenuator off. Valid values are listed in
+    /// [`RigCapabilities::attenuator_levels`].
+    async fn set_attenuator(&self, _receiver: ReceiverId, _db: u8) -> Result<()> {
         Err(crate::error::Error::Unsupported(
             "attenuator control not supported".into(),
         ))
@@ -206,32 +207,24 @@ pub trait Rig: Send + Sync {
     ///
     /// Returns `(enabled, offset_hz)` where `offset_hz` can be negative.
     async fn get_rit(&self) -> Result<(bool, i32)> {
-        Err(crate::error::Error::Unsupported(
-            "RIT not supported".into(),
-        ))
+        Err(crate::error::Error::Unsupported("RIT not supported".into()))
     }
 
     /// Set the RIT state and offset in hertz.
     async fn set_rit(&self, _enabled: bool, _offset_hz: i32) -> Result<()> {
-        Err(crate::error::Error::Unsupported(
-            "RIT not supported".into(),
-        ))
+        Err(crate::error::Error::Unsupported("RIT not supported".into()))
     }
 
     /// Get the current XIT (Transmitter Incremental Tuning) state and offset.
     ///
     /// Returns `(enabled, offset_hz)` where `offset_hz` can be negative.
     async fn get_xit(&self) -> Result<(bool, i32)> {
-        Err(crate::error::Error::Unsupported(
-            "XIT not supported".into(),
-        ))
+        Err(crate::error::Error::Unsupported("XIT not supported".into()))
     }
 
     /// Set the XIT state and offset in hertz.
     async fn set_xit(&self, _enabled: bool, _offset_hz: i32) -> Result<()> {
-        Err(crate::error::Error::Unsupported(
-            "XIT not supported".into(),
-        ))
+        Err(crate::error::Error::Unsupported("XIT not supported".into()))
     }
 
     /// Send a CW message as text.

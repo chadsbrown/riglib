@@ -389,45 +389,6 @@ impl FromStr for PreampLevel {
     }
 }
 
-/// RF attenuator level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AttenuatorLevel {
-    /// Attenuator off (0 dB).
-    Off,
-    /// 6 dB attenuation.
-    Db6,
-    /// 12 dB attenuation.
-    Db12,
-    /// 18 dB attenuation.
-    Db18,
-}
-
-impl fmt::Display for AttenuatorLevel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            AttenuatorLevel::Off => "OFF",
-            AttenuatorLevel::Db6 => "6dB",
-            AttenuatorLevel::Db12 => "12dB",
-            AttenuatorLevel::Db18 => "18dB",
-        };
-        write!(f, "{s}")
-    }
-}
-
-impl FromStr for AttenuatorLevel {
-    type Err = ParseModeError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_uppercase().as_str() {
-            "OFF" | "0" => Ok(AttenuatorLevel::Off),
-            "6" | "6DB" => Ok(AttenuatorLevel::Db6),
-            "12" | "12DB" => Ok(AttenuatorLevel::Db12),
-            "18" | "18DB" => Ok(AttenuatorLevel::Db18),
-            _ => Err(ParseModeError(s.to_string())),
-        }
-    }
-}
-
 /// Antenna port selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AntennaPort {
@@ -520,8 +481,12 @@ pub struct RigCapabilities {
     pub agc_modes: Vec<AgcMode>,
     /// Preamp levels supported by this rig.
     pub preamp_levels: Vec<PreampLevel>,
-    /// Attenuator levels supported by this rig.
-    pub attenuator_levels: Vec<AttenuatorLevel>,
+    /// Attenuator levels supported by this rig (each value is dB of attenuation).
+    ///
+    /// `0` means attenuator off. Other values are the dB settings the rig supports.
+    /// For example `vec![0, 6, 12, 18]` means the rig offers off, 6 dB, 12 dB,
+    /// and 18 dB attenuation steps.
+    pub attenuator_levels: Vec<u8>,
     /// Antenna ports available on this rig.
     pub antenna_ports: Vec<AntennaPort>,
     /// Whether the rig supports RIT (Receiver Incremental Tuning).

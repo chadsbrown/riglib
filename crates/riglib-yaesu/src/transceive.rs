@@ -81,7 +81,10 @@ impl TransceiveHandle {
     pub(crate) async fn shutdown(self) -> Result<Box<dyn Transport>> {
         let (transport_tx, transport_rx) = oneshot::channel();
         // Don't care if send fails -- reader might have already exited.
-        let _ = self.cmd_tx.send(CommandRequest::Shutdown { transport_tx }).await;
+        let _ = self
+            .cmd_tx
+            .send(CommandRequest::Shutdown { transport_tx })
+            .await;
         let transport = transport_rx.await.map_err(|_| Error::NotConnected)?;
         // Wait for the task to finish.
         let _ = self.task_handle.await;
@@ -203,10 +206,7 @@ fn process_ai_response(prefix: &str, data: &str, event_tx: &broadcast::Sender<Ri
         "RT0" => match commands::parse_rit_response(data) {
             Ok((enabled, offset_hz)) => {
                 debug!(enabled, offset_hz, "AI RIT update");
-                let _ = event_tx.send(RigEvent::RitChanged {
-                    enabled,
-                    offset_hz,
-                });
+                let _ = event_tx.send(RigEvent::RitChanged { enabled, offset_hz });
             }
             Err(e) => {
                 debug!(?e, "failed to parse AI RIT response");
@@ -215,10 +215,7 @@ fn process_ai_response(prefix: &str, data: &str, event_tx: &broadcast::Sender<Ri
         "XT0" => match commands::parse_xit_response(data) {
             Ok((enabled, offset_hz)) => {
                 debug!(enabled, offset_hz, "AI XIT update");
-                let _ = event_tx.send(RigEvent::XitChanged {
-                    enabled,
-                    offset_hz,
-                });
+                let _ = event_tx.send(RigEvent::XitChanged { enabled, offset_hz });
             }
             Err(e) => {
                 debug!(?e, "failed to parse AI XIT response");
@@ -667,10 +664,7 @@ mod tests {
 
         let event = event_rx.try_recv().unwrap();
         match event {
-            RigEvent::RitChanged {
-                enabled,
-                offset_hz,
-            } => {
+            RigEvent::RitChanged { enabled, offset_hz } => {
                 assert!(enabled);
                 assert_eq!(offset_hz, 50);
             }
@@ -686,10 +680,7 @@ mod tests {
 
         let event = event_rx.try_recv().unwrap();
         match event {
-            RigEvent::XitChanged {
-                enabled,
-                offset_hz,
-            } => {
+            RigEvent::XitChanged { enabled, offset_hz } => {
                 assert!(!enabled);
                 assert_eq!(offset_hz, 0);
             }

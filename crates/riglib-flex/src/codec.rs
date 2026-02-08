@@ -201,7 +201,11 @@ pub fn cmd_slice_set_dax(slice_index: u8, dax_channel: u8) -> String {
 ///
 /// Example output: `"slice set 0 rit_on=1"` or `"slice set 0 rit_on=0"`
 pub fn cmd_slice_set_rit_on(slice_index: u8, on: bool) -> String {
-    format!("slice set {} rit_on={}", slice_index, if on { "1" } else { "0" })
+    format!(
+        "slice set {} rit_on={}",
+        slice_index,
+        if on { "1" } else { "0" }
+    )
 }
 
 /// Build a slice set RIT frequency offset command.
@@ -217,7 +221,11 @@ pub fn cmd_slice_set_rit_freq(slice_index: u8, offset_hz: i32) -> String {
 ///
 /// Example output: `"slice set 0 xit_on=1"` or `"slice set 0 xit_on=0"`
 pub fn cmd_slice_set_xit_on(slice_index: u8, on: bool) -> String {
-    format!("slice set {} xit_on={}", slice_index, if on { "1" } else { "0" })
+    format!(
+        "slice set {} xit_on={}",
+        slice_index,
+        if on { "1" } else { "0" }
+    )
 }
 
 /// Build a slice set XIT frequency offset command.
@@ -780,10 +788,7 @@ mod tests {
 
     #[test]
     fn cmd_slice_set_agc_mode_off() {
-        assert_eq!(
-            cmd_slice_set_agc_mode(0, "off"),
-            "slice set 0 agc_mode=off"
-        );
+        assert_eq!(cmd_slice_set_agc_mode(0, "off"), "slice set 0 agc_mode=off");
     }
 
     #[test]
@@ -796,10 +801,7 @@ mod tests {
 
     #[test]
     fn cmd_slice_set_agc_mode_med() {
-        assert_eq!(
-            cmd_slice_set_agc_mode(1, "med"),
-            "slice set 1 agc_mode=med"
-        );
+        assert_eq!(cmd_slice_set_agc_mode(1, "med"), "slice set 1 agc_mode=med");
     }
 
     #[test]
@@ -1234,18 +1236,12 @@ mod tests {
 
     #[test]
     fn cmd_slice_set_rit_freq_positive() {
-        assert_eq!(
-            cmd_slice_set_rit_freq(0, 150),
-            "slice set 0 rit_freq=150"
-        );
+        assert_eq!(cmd_slice_set_rit_freq(0, 150), "slice set 0 rit_freq=150");
     }
 
     #[test]
     fn cmd_slice_set_rit_freq_negative() {
-        assert_eq!(
-            cmd_slice_set_rit_freq(1, -200),
-            "slice set 1 rit_freq=-200"
-        );
+        assert_eq!(cmd_slice_set_rit_freq(1, -200), "slice set 1 rit_freq=-200");
     }
 
     #[test]
@@ -1265,18 +1261,12 @@ mod tests {
 
     #[test]
     fn cmd_slice_set_xit_freq_positive() {
-        assert_eq!(
-            cmd_slice_set_xit_freq(0, 500),
-            "slice set 0 xit_freq=500"
-        );
+        assert_eq!(cmd_slice_set_xit_freq(0, 500), "slice set 0 xit_freq=500");
     }
 
     #[test]
     fn cmd_slice_set_xit_freq_negative() {
-        assert_eq!(
-            cmd_slice_set_xit_freq(2, -300),
-            "slice set 2 xit_freq=-300"
-        );
+        assert_eq!(cmd_slice_set_xit_freq(2, -300), "slice set 2 xit_freq=-300");
     }
 
     #[test]
@@ -1437,10 +1427,7 @@ mod tests {
 
     #[test]
     fn cmd_cwx_send_multiple_spaces() {
-        assert_eq!(
-            cmd_cwx_send("CQ DE W1AW"),
-            "cwx send \"CQ\x7FDE\x7FW1AW\""
-        );
+        assert_eq!(cmd_cwx_send("CQ DE W1AW"), "cwx send \"CQ\x7FDE\x7FW1AW\"");
     }
 
     #[test]

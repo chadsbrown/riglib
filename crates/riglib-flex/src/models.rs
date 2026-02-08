@@ -26,7 +26,10 @@
 //! | FLEX-8400   | `flex8400`  | 4      | 2    | 4           | No          |
 //! | FLEX-8600   | `flex8600`  | 8      | 2    | 8           | No          |
 
-use riglib_core::{BandRange, ConnectionType, Manufacturer, Mode, RigCapabilities, RigDefinition};
+use riglib_core::{
+    AgcMode, AntennaPort, BandRange, ConnectionType, Manufacturer, Mode, RigCapabilities,
+    RigDefinition,
+};
 
 /// Static model definition for a FlexRadio SDR transceiver.
 ///
@@ -123,8 +126,15 @@ fn flex_capabilities(max_slices: u8) -> RigCapabilities {
         supported_modes: flex_modes(),
         frequency_ranges: hf_6m_range(),
         max_power_watts: 100.0,
+        agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+        preamp_levels: vec![],
+        attenuator_levels: vec![],
+        antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
+        has_cw_keyer: true,
         has_cw_messages: true,
-        ..Default::default()
+        has_vfo_ab_swap: false,
+        has_vfo_ab_equal: false,
+        has_transceive: false,
     }
 }
 

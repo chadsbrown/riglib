@@ -73,7 +73,10 @@ impl TransceiveHandle {
     pub(crate) async fn shutdown(self) -> Result<Box<dyn Transport>> {
         let (transport_tx, transport_rx) = oneshot::channel();
         // Don't care if send fails -- reader might have already exited.
-        let _ = self.cmd_tx.send(CommandRequest::Shutdown { transport_tx }).await;
+        let _ = self
+            .cmd_tx
+            .send(CommandRequest::Shutdown { transport_tx })
+            .await;
         let transport = transport_rx.await.map_err(|_| Error::NotConnected)?;
         // Wait for the task to finish.
         let _ = self.task_handle.await;
@@ -353,9 +356,7 @@ async fn reader_loop(
 /// - `TX;` -> `"TX"`
 fn extract_command_prefix(cmd: &[u8]) -> String {
     let s = std::str::from_utf8(cmd).unwrap_or("");
-    s.chars()
-        .take_while(|c| c.is_ascii_alphabetic())
-        .collect()
+    s.chars().take_while(|c| c.is_ascii_alphabetic()).collect()
 }
 
 /// Execute a CAT command on the transport, handling retry and interleaved

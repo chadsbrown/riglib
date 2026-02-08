@@ -141,8 +141,8 @@ async fn main() -> anyhow::Result<()> {
                     RigEvent::PreampChanged { receiver, level } => {
                         println!("{} PreampChanged     {} -> {}", timestamp, receiver, level);
                     }
-                    RigEvent::AttenuatorChanged { receiver, level } => {
-                        println!("{} AttenuatorChanged {} -> {}", timestamp, receiver, level);
+                    RigEvent::AttenuatorChanged { receiver, db } => {
+                        println!("{} AttenuatorChanged {} -> {} dB", timestamp, receiver, db);
                     }
                 }
             }

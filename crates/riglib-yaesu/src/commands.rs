@@ -744,11 +744,9 @@ fn parse_rit_xit_response(data: &str, label: &str) -> Result<(bool, i32)> {
     };
 
     let digits = &data[2..6];
-    let abs_offset: i32 = digits.parse().map_err(|e| {
-        Error::Protocol(format!(
-            "invalid {label} offset digits: {digits:?} ({e})"
-        ))
-    })?;
+    let abs_offset: i32 = digits
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid {label} offset digits: {digits:?} ({e})")))?;
 
     Ok((on, sign * abs_offset))
 }

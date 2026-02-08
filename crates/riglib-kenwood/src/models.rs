@@ -20,7 +20,10 @@
 //! | TS-990S    | 115200  | 200W  | HF + 6m    | Yes     |
 //! | TS-890S    | 115200  | 100W  | HF + 6m    | Yes     |
 
-use riglib_core::{BandRange, ConnectionType, Manufacturer, Mode, RigCapabilities, RigDefinition};
+use riglib_core::{
+    AgcMode, AntennaPort, BandRange, ConnectionType, Manufacturer, Mode, PreampLevel,
+    RigCapabilities, RigDefinition,
+};
 
 /// Which AGC command variant a Kenwood model uses.
 ///
@@ -154,10 +157,17 @@ pub fn ts_590s() -> KenwoodModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 6, 12, 18],
+            antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
         has_data_modes: false,
         agc_command_style: AgcCommandStyle::GtTimeConstant,
@@ -192,10 +202,17 @@ pub fn ts_590sg() -> KenwoodModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 6, 12, 18],
+            antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
         has_data_modes: false,
         agc_command_style: AgcCommandStyle::GtTimeConstant,
@@ -231,10 +248,22 @@ pub fn ts_990s() -> KenwoodModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 200.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1, PreampLevel::Preamp2],
+            attenuator_levels: vec![0, 6, 12, 18],
+            antenna_ports: vec![
+                AntennaPort::Ant1,
+                AntennaPort::Ant2,
+                AntennaPort::Ant3,
+                AntennaPort::Ant4,
+            ],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
         has_data_modes: true,
         agc_command_style: AgcCommandStyle::GcVfo,
@@ -270,10 +299,17 @@ pub fn ts_890s() -> KenwoodModel {
             supported_modes: standard_hf_modes(),
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
+            agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            attenuator_levels: vec![0, 6, 12, 18],
+            antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
             has_rit: true,
             has_xit: true,
+            has_cw_keyer: true,
             has_cw_messages: true,
-            ..Default::default()
+            has_vfo_ab_swap: true,
+            has_vfo_ab_equal: true,
+            has_transceive: true,
         },
         has_data_modes: true,
         agc_command_style: AgcCommandStyle::GcSimple,

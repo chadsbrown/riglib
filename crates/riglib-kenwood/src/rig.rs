@@ -182,7 +182,7 @@ impl KenwoodRig {
         {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(Error::NotConnected), // oneshot sender dropped
-            Err(_) => Err(Error::Timeout),           // overall timeout
+            Err(_) => Err(Error::Timeout),          // overall timeout
         }
     }
 
@@ -629,7 +629,7 @@ impl Rig for KenwoodRig {
                     other => {
                         return Err(Error::Protocol(format!(
                             "unknown Kenwood AGC mode value: {other}"
-                        )))
+                        )));
                     }
                 }
             }
@@ -647,7 +647,7 @@ impl Rig for KenwoodRig {
                     other => {
                         return Err(Error::Protocol(format!(
                             "unknown Kenwood AGC mode value: {other}"
-                        )))
+                        )));
                     }
                 }
             }
@@ -664,7 +664,7 @@ impl Rig for KenwoodRig {
                     other => {
                         return Err(Error::Protocol(format!(
                             "unknown Kenwood AGC time constant: {other}"
-                        )))
+                        )));
                     }
                 }
             }
@@ -730,12 +730,13 @@ impl Rig for KenwoodRig {
             other => {
                 return Err(Error::Protocol(format!(
                     "unknown Kenwood preamp level: {other}"
-                )))
+                )));
             }
         };
-        let _ = self
-            .event_tx
-            .send(RigEvent::PreampChanged { receiver: rx, level });
+        let _ = self.event_tx.send(RigEvent::PreampChanged {
+            receiver: rx,
+            level,
+        });
         Ok(level)
     }
 
@@ -756,49 +757,31 @@ impl Rig for KenwoodRig {
         let cmd = commands::cmd_set_preamp(value);
         debug!(receiver = %rx, ?level, "setting preamp");
         self.execute_set_command(&cmd).await?;
-        let _ = self
-            .event_tx
-            .send(RigEvent::PreampChanged { receiver: rx, level });
+        let _ = self.event_tx.send(RigEvent::PreampChanged {
+            receiver: rx,
+            level,
+        });
         Ok(())
     }
 
-    async fn get_attenuator(&self, rx: ReceiverId) -> Result<AttenuatorLevel> {
+    async fn get_attenuator(&self, rx: ReceiverId) -> Result<u8> {
         debug!(receiver = %rx, "reading attenuator level");
         let cmd = commands::cmd_read_attenuator();
         let (_prefix, data) = self.execute_command(&cmd).await?;
-        let raw = commands::parse_attenuator_response(&data)?;
-        let level = match raw {
-            0 => AttenuatorLevel::Off,
-            6 => AttenuatorLevel::Db6,
-            12 => AttenuatorLevel::Db12,
-            18 => AttenuatorLevel::Db18,
-            other => {
-                return Err(Error::Protocol(format!(
-                    "unknown Kenwood attenuator level: {other}"
-                )))
-            }
-        };
-        let _ = self.event_tx.send(RigEvent::AttenuatorChanged {
-            receiver: rx,
-            level,
-        });
-        Ok(level)
+        let db = commands::parse_attenuator_response(&data)?;
+        let _ = self
+            .event_tx
+            .send(RigEvent::AttenuatorChanged { receiver: rx, db });
+        Ok(db)
     }
 
-    async fn set_attenuator(&self, rx: ReceiverId, level: AttenuatorLevel) -> Result<()> {
-        let value = match level {
-            AttenuatorLevel::Off => 0,
-            AttenuatorLevel::Db6 => 6,
-            AttenuatorLevel::Db12 => 12,
-            AttenuatorLevel::Db18 => 18,
-        };
-        let cmd = commands::cmd_set_attenuator(value);
-        debug!(receiver = %rx, ?level, "setting attenuator");
+    async fn set_attenuator(&self, rx: ReceiverId, db: u8) -> Result<()> {
+        let cmd = commands::cmd_set_attenuator(db);
+        debug!(receiver = %rx, db, "setting attenuator");
         self.execute_set_command(&cmd).await?;
-        let _ = self.event_tx.send(RigEvent::AttenuatorChanged {
-            receiver: rx,
-            level,
-        });
+        let _ = self
+            .event_tx
+            .send(RigEvent::AttenuatorChanged { receiver: rx, db });
         Ok(())
     }
 
@@ -944,7 +927,11 @@ impl Rig for KenwoodRig {
         let chars: Vec<char> = message.chars().collect();
         let chunks: Vec<String> = chars.chunks(24).map(|c| c.iter().collect()).collect();
 
-        debug!(message_len = message.len(), num_chunks = chunks.len(), "sending CW message");
+        debug!(
+            message_len = message.len(),
+            num_chunks = chunks.len(),
+            "sending CW message"
+        );
 
         for (i, chunk) in chunks.iter().enumerate() {
             // Poll the buffer status before sending each chunk.
@@ -1678,9 +1665,7 @@ mod tests {
         mock.expect(&cmd, b"GC1;");
 
         let rig = make_test_rig(mock);
-        rig.set_agc(ReceiverId::VFO_A, AgcMode::Slow)
-            .await
-            .unwrap();
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Slow).await.unwrap();
     }
 
     #[tokio::test]
@@ -1690,9 +1675,7 @@ mod tests {
         mock.expect(&cmd, b"GC3;");
 
         let rig = make_test_rig(mock);
-        rig.set_agc(ReceiverId::VFO_A, AgcMode::Fast)
-            .await
-            .unwrap();
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Fast).await.unwrap();
     }
 
     // -----------------------------------------------------------------
@@ -1794,9 +1777,7 @@ mod tests {
         mock.expect(&cmd, b"GT020;");
 
         let rig = make_single_rx_rig(mock);
-        rig.set_agc(ReceiverId::VFO_A, AgcMode::Slow)
-            .await
-            .unwrap();
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Slow).await.unwrap();
     }
 
     #[tokio::test]
@@ -1806,9 +1787,7 @@ mod tests {
         mock.expect(&cmd, b"GT000;");
 
         let rig = make_single_rx_rig(mock);
-        rig.set_agc(ReceiverId::VFO_A, AgcMode::Off)
-            .await
-            .unwrap();
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Off).await.unwrap();
     }
 
     // -----------------------------------------------------------------
@@ -1824,9 +1803,7 @@ mod tests {
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();
 
-        rig.set_agc(ReceiverId::VFO_A, AgcMode::Fast)
-            .await
-            .unwrap();
+        rig.set_agc(ReceiverId::VFO_A, AgcMode::Fast).await.unwrap();
 
         let event = event_rx.try_recv().unwrap();
         match event {
@@ -2003,8 +1980,8 @@ mod tests {
         mock.expect(&cmd, b"RA00;");
 
         let rig = make_test_rig(mock);
-        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
-        assert_eq!(level, AttenuatorLevel::Off);
+        let db = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(db, 0);
     }
 
     #[tokio::test]
@@ -2014,8 +1991,8 @@ mod tests {
         mock.expect(&cmd, b"RA06;");
 
         let rig = make_test_rig(mock);
-        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
-        assert_eq!(level, AttenuatorLevel::Db6);
+        let db = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(db, 6);
     }
 
     #[tokio::test]
@@ -2025,8 +2002,8 @@ mod tests {
         mock.expect(&cmd, b"RA12;");
 
         let rig = make_test_rig(mock);
-        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
-        assert_eq!(level, AttenuatorLevel::Db12);
+        let db = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(db, 12);
     }
 
     #[tokio::test]
@@ -2036,27 +2013,8 @@ mod tests {
         mock.expect(&cmd, b"RA18;");
 
         let rig = make_test_rig(mock);
-        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
-        assert_eq!(level, AttenuatorLevel::Db18);
-    }
-
-    #[tokio::test]
-    async fn test_get_attenuator_unknown_value_returns_error() {
-        let mut mock = MockTransport::new();
-        let cmd = commands::cmd_read_attenuator();
-        // Value 09 is not a valid attenuator level
-        mock.expect(&cmd, b"RA09;");
-
-        let rig = make_test_rig(mock);
-        let result = rig.get_attenuator(ReceiverId::VFO_A).await;
-        assert!(result.is_err());
-        match result {
-            Err(Error::Protocol(msg)) => {
-                assert!(msg.contains("unknown Kenwood attenuator level"));
-            }
-            Err(other) => panic!("expected Protocol error, got: {other:?}"),
-            Ok(_) => panic!("expected error, got Ok"),
-        }
+        let db = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(db, 18);
     }
 
     #[tokio::test]
@@ -2066,9 +2024,7 @@ mod tests {
         mock.expect(&cmd, b"RA00;");
 
         let rig = make_test_rig(mock);
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Off)
-            .await
-            .unwrap();
+        rig.set_attenuator(ReceiverId::VFO_A, 0).await.unwrap();
     }
 
     #[tokio::test]
@@ -2078,9 +2034,7 @@ mod tests {
         mock.expect(&cmd, b"RA06;");
 
         let rig = make_test_rig(mock);
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db6)
-            .await
-            .unwrap();
+        rig.set_attenuator(ReceiverId::VFO_A, 6).await.unwrap();
     }
 
     #[tokio::test]
@@ -2090,9 +2044,7 @@ mod tests {
         mock.expect(&cmd, b"RA12;");
 
         let rig = make_test_rig(mock);
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db12)
-            .await
-            .unwrap();
+        rig.set_attenuator(ReceiverId::VFO_A, 12).await.unwrap();
     }
 
     #[tokio::test]
@@ -2102,9 +2054,7 @@ mod tests {
         mock.expect(&cmd, b"RA18;");
 
         let rig = make_test_rig(mock);
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db18)
-            .await
-            .unwrap();
+        rig.set_attenuator(ReceiverId::VFO_A, 18).await.unwrap();
     }
 
     #[tokio::test]
@@ -2116,14 +2066,14 @@ mod tests {
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();
 
-        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
-        assert_eq!(level, AttenuatorLevel::Db12);
+        let db = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(db, 12);
 
         let event = event_rx.try_recv().unwrap();
         match event {
-            RigEvent::AttenuatorChanged { receiver, level } => {
+            RigEvent::AttenuatorChanged { receiver, db } => {
                 assert_eq!(receiver, ReceiverId::VFO_A);
-                assert_eq!(level, AttenuatorLevel::Db12);
+                assert_eq!(db, 12);
             }
             other => panic!("expected AttenuatorChanged, got {other:?}"),
         }
@@ -2138,15 +2088,13 @@ mod tests {
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();
 
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db18)
-            .await
-            .unwrap();
+        rig.set_attenuator(ReceiverId::VFO_A, 18).await.unwrap();
 
         let event = event_rx.try_recv().unwrap();
         match event {
-            RigEvent::AttenuatorChanged { receiver, level } => {
+            RigEvent::AttenuatorChanged { receiver, db } => {
                 assert_eq!(receiver, ReceiverId::VFO_A);
-                assert_eq!(level, AttenuatorLevel::Db18);
+                assert_eq!(db, 18);
             }
             other => panic!("expected AttenuatorChanged, got {other:?}"),
         }

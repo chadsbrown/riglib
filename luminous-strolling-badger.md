@@ -1148,7 +1148,7 @@ to the `Rig` trait's `enable_transceive()` method (already defined with default
 
 ---
 
-## Phase 12b: Transceive Trait — disable_transceive() Implementation
+## Phase 12b: Transceive Trait — disable_transceive() Implementation — ✅ DONE
 
 Implement real `disable_transceive()` for each serial backend: shut down the background
 reader task, send "AI off" command (CI-V transceive off for Icom, `AI0;` for
@@ -1169,7 +1169,7 @@ Kenwood/Elecraft/Yaesu), and return transport ownership to direct mode.
 
 ---
 
-## Phase 13: RigCapabilities Updates
+## Phase 13: RigCapabilities Updates — ✅ DONE
 
 Populate the new `RigCapabilities` fields (from Phase 1) for every model definition.
 

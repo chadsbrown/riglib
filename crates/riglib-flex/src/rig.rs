@@ -1334,9 +1334,7 @@ mod tests {
 
             // Send slice 0 status so the slice exists.
             stream
-                .write_all(
-                    b"S12345678|slice 0 RF_frequency=14.250000 mode=USB tx=1 active=1\n",
-                )
+                .write_all(b"S12345678|slice 0 RF_frequency=14.250000 mode=USB tx=1 active=1\n")
                 .await
                 .unwrap();
             stream.flush().await.unwrap();
@@ -1371,9 +1369,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
 
             stream
-                .write_all(
-                    b"S12345678|slice 0 RF_frequency=14.250000 mode=USB tx=1 active=1\n",
-                )
+                .write_all(b"S12345678|slice 0 RF_frequency=14.250000 mode=USB tx=1 active=1\n")
                 .await
                 .unwrap();
             stream.flush().await.unwrap();
@@ -1444,9 +1440,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
 
             stream
-                .write_all(
-                    b"S12345678|slice 0 RF_frequency=14.250000 mode=USB tx=1 active=1\n",
-                )
+                .write_all(b"S12345678|slice 0 RF_frequency=14.250000 mode=USB tx=1 active=1\n")
                 .await
                 .unwrap();
             stream.flush().await.unwrap();

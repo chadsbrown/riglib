@@ -26,6 +26,29 @@ use crate::commands;
 use crate::models::IcomModel;
 use crate::transceive::{self, CommandRequest, TransceiveHandle};
 
+// ---------------------------------------------------------------
+// BCD helpers for CI-V attenuator byte encoding
+// ---------------------------------------------------------------
+
+/// Convert a BCD-encoded attenuator byte to a decimal dB value.
+///
+/// CI-V encodes attenuator levels in BCD: the byte 0x20 represents 20 dB,
+/// 0x06 represents 6 dB, etc.
+fn bcd_to_db(bcd: u8) -> u8 {
+    let tens = (bcd >> 4) & 0x0F;
+    let ones = bcd & 0x0F;
+    tens * 10 + ones
+}
+
+/// Convert a decimal dB value to a BCD-encoded attenuator byte.
+///
+/// 20 dB becomes 0x20, 6 dB becomes 0x06, etc.
+fn db_to_bcd(db: u8) -> u8 {
+    let tens = db / 10;
+    let ones = db % 10;
+    (tens << 4) | ones
+}
+
 /// A connected Icom transceiver controlled over CI-V.
 ///
 /// Constructed via [`IcomBuilder`](crate::builder::IcomBuilder). All rig
@@ -896,9 +919,10 @@ impl Rig for IcomRig {
             }
         };
 
-        let _ = self
-            .event_tx
-            .send(RigEvent::PreampChanged { receiver: rx, level });
+        let _ = self.event_tx.send(RigEvent::PreampChanged {
+            receiver: rx,
+            level,
+        });
         Ok(level)
     }
 
@@ -923,13 +947,14 @@ impl Rig for IcomRig {
         debug!(receiver = %rx, %level, "setting preamp level");
         self.execute_ack_command(&cmd).await?;
 
-        let _ = self
-            .event_tx
-            .send(RigEvent::PreampChanged { receiver: rx, level });
+        let _ = self.event_tx.send(RigEvent::PreampChanged {
+            receiver: rx,
+            level,
+        });
         Ok(())
     }
 
-    async fn get_attenuator(&self, rx: ReceiverId) -> Result<AttenuatorLevel> {
+    async fn get_attenuator(&self, rx: ReceiverId) -> Result<u8> {
         self.select_receiver(rx).await?;
 
         let cmd = commands::cmd_read_attenuator(self.civ_address);
@@ -939,39 +964,30 @@ impl Rig for IcomRig {
 
         let raw = commands::parse_attenuator_response(&data)?;
 
-        // Icom attenuators are binary: 0x00 = off, 0x20 = ~20 dB on.
-        // Map any non-zero value to Db12 (closest generic match).
-        let level = if raw == 0x00 {
-            AttenuatorLevel::Off
-        } else {
-            AttenuatorLevel::Db12
-        };
+        // CI-V attenuator byte is BCD-encoded: 0x00 = off, 0x20 = 20 dB.
+        // Convert BCD byte to decimal dB value.
+        let db = bcd_to_db(raw);
 
-        let _ = self.event_tx.send(RigEvent::AttenuatorChanged {
-            receiver: rx,
-            level,
-        });
-        Ok(level)
+        let _ = self
+            .event_tx
+            .send(RigEvent::AttenuatorChanged { receiver: rx, db });
+        Ok(db)
     }
 
-    async fn set_attenuator(&self, rx: ReceiverId, level: AttenuatorLevel) -> Result<()> {
+    async fn set_attenuator(&self, rx: ReceiverId, db: u8) -> Result<()> {
         self.select_receiver(rx).await?;
 
-        // Icom attenuators are binary on/off. Any non-Off level maps to 0x20.
-        let raw = match level {
-            AttenuatorLevel::Off => 0x00,
-            _ => 0x20,
-        };
+        // CI-V attenuator byte is BCD-encoded: convert decimal dB to BCD.
+        // e.g. 20 dB -> 0x20, 6 dB -> 0x06.
+        let raw = db_to_bcd(db);
 
         let cmd = commands::cmd_set_attenuator(self.civ_address, raw);
-        debug!(receiver = %rx, %level, "setting attenuator level");
+        debug!(receiver = %rx, db, "setting attenuator");
         self.execute_ack_command(&cmd).await?;
 
-        // Emit the level the user requested, not the mapped binary value.
-        let _ = self.event_tx.send(RigEvent::AttenuatorChanged {
-            receiver: rx,
-            level,
-        });
+        let _ = self
+            .event_tx
+            .send(RigEvent::AttenuatorChanged { receiver: rx, db });
         Ok(())
     }
 
@@ -1496,13 +1512,7 @@ mod tests {
         let mut mock = MockTransport::new();
 
         let read_cmd = commands::cmd_read_antenna(IC7610_ADDR);
-        let antenna_response = civ::encode_frame(
-            CONTROLLER_ADDR,
-            IC7610_ADDR,
-            0x12,
-            None,
-            &[0x01],
-        );
+        let antenna_response = civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x12, None, &[0x01]);
         mock.expect(&read_cmd, &echo_and_response(&read_cmd, &antenna_response));
 
         let rig = make_test_rig(mock);
@@ -1515,13 +1525,7 @@ mod tests {
         let mut mock = MockTransport::new();
 
         let read_cmd = commands::cmd_read_antenna(IC7610_ADDR);
-        let antenna_response = civ::encode_frame(
-            CONTROLLER_ADDR,
-            IC7610_ADDR,
-            0x12,
-            None,
-            &[0x02],
-        );
+        let antenna_response = civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x12, None, &[0x02]);
         mock.expect(&read_cmd, &echo_and_response(&read_cmd, &antenna_response));
 
         let rig = make_test_rig(mock);
@@ -1580,13 +1584,8 @@ mod tests {
 
         // Read AGC mode => fast (0x01)
         let agc_cmd = commands::cmd_read_agc_mode(IC7610_ADDR);
-        let agc_response = civ::encode_frame(
-            CONTROLLER_ADDR,
-            IC7610_ADDR,
-            0x16,
-            Some(0x12),
-            &[0x01],
-        );
+        let agc_response =
+            civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x16, Some(0x12), &[0x01]);
         mock.expect(&agc_cmd, &echo_and_response(&agc_cmd, &agc_response));
 
         let rig = make_test_rig(mock);
@@ -1630,24 +1629,14 @@ mod tests {
 
         // IC-7610: time constant non-zero
         let tc_cmd = commands::cmd_read_agc_time_constant(IC7610_ADDR);
-        let tc_response = civ::encode_frame(
-            CONTROLLER_ADDR,
-            IC7610_ADDR,
-            0x1A,
-            Some(0x04),
-            &[0x10],
-        );
+        let tc_response =
+            civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x1A, Some(0x04), &[0x10]);
         mock.expect(&tc_cmd, &echo_and_response(&tc_cmd, &tc_response));
 
         // Read AGC mode => slow (0x03)
         let agc_cmd = commands::cmd_read_agc_mode(IC7610_ADDR);
-        let agc_response = civ::encode_frame(
-            CONTROLLER_ADDR,
-            IC7610_ADDR,
-            0x16,
-            Some(0x12),
-            &[0x03],
-        );
+        let agc_response =
+            civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x16, Some(0x12), &[0x03]);
         mock.expect(&agc_cmd, &echo_and_response(&agc_cmd, &agc_response));
 
         let rig = make_test_rig(mock);
@@ -1760,13 +1749,8 @@ mod tests {
 
         // Read preamp: rig responds with preamp off (0x00)
         let read_cmd = commands::cmd_read_preamp(IC7610_ADDR);
-        let preamp_response = civ::encode_frame(
-            CONTROLLER_ADDR,
-            IC7610_ADDR,
-            0x16,
-            Some(0x02),
-            &[0x00],
-        );
+        let preamp_response =
+            civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x16, Some(0x02), &[0x00]);
         mock.expect(&read_cmd, &echo_and_response(&read_cmd, &preamp_response));
 
         let rig = make_test_rig(mock);
@@ -1782,13 +1766,8 @@ mod tests {
         mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
 
         let read_cmd = commands::cmd_read_preamp(IC7610_ADDR);
-        let preamp_response = civ::encode_frame(
-            CONTROLLER_ADDR,
-            IC7610_ADDR,
-            0x16,
-            Some(0x02),
-            &[0x01],
-        );
+        let preamp_response =
+            civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x16, Some(0x02), &[0x01]);
         mock.expect(&read_cmd, &echo_and_response(&read_cmd, &preamp_response));
 
         let rig = make_test_rig(mock);
@@ -1804,13 +1783,8 @@ mod tests {
         mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
 
         let read_cmd = commands::cmd_read_preamp(IC7610_ADDR);
-        let preamp_response = civ::encode_frame(
-            CONTROLLER_ADDR,
-            IC7610_ADDR,
-            0x16,
-            Some(0x02),
-            &[0x02],
-        );
+        let preamp_response =
+            civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x16, Some(0x02), &[0x02]);
         mock.expect(&read_cmd, &echo_and_response(&read_cmd, &preamp_response));
 
         let rig = make_test_rig(mock);
@@ -1926,20 +1900,13 @@ mod tests {
         mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
 
         // Read attenuator: rig responds with att off (0x00)
-        // Attenuator uses cmd 0x11 with no sub-command
         let read_cmd = commands::cmd_read_attenuator(IC7610_ADDR);
-        let att_response = civ::encode_frame(
-            CONTROLLER_ADDR,
-            IC7610_ADDR,
-            0x11,
-            None,
-            &[0x00],
-        );
+        let att_response = civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x11, None, &[0x00]);
         mock.expect(&read_cmd, &echo_and_response(&read_cmd, &att_response));
 
         let rig = make_test_rig(mock);
-        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
-        assert_eq!(level, AttenuatorLevel::Off);
+        let db = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(db, 0);
     }
 
     #[tokio::test]
@@ -1950,19 +1917,13 @@ mod tests {
         mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
 
         let read_cmd = commands::cmd_read_attenuator(IC7610_ADDR);
-        let att_response = civ::encode_frame(
-            CONTROLLER_ADDR,
-            IC7610_ADDR,
-            0x11,
-            None,
-            &[0x20],
-        );
+        let att_response = civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x11, None, &[0x20]);
         mock.expect(&read_cmd, &echo_and_response(&read_cmd, &att_response));
 
         let rig = make_test_rig(mock);
-        let level = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
-        // Icom 0x20 maps to Db12 as the closest generic match
-        assert_eq!(level, AttenuatorLevel::Db12);
+        let db = rig.get_attenuator(ReceiverId::VFO_A).await.unwrap();
+        // Icom 0x20 BCD byte = 20 dB decimal
+        assert_eq!(db, 20);
     }
 
     #[tokio::test]
@@ -1976,43 +1937,21 @@ mod tests {
         mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
 
         let rig = make_test_rig(mock);
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Off)
-            .await
-            .unwrap();
+        rig.set_attenuator(ReceiverId::VFO_A, 0).await.unwrap();
     }
 
     #[tokio::test]
-    async fn test_set_attenuator_db12_maps_to_0x20() {
+    async fn test_set_attenuator_20db() {
         let mut mock = MockTransport::new();
 
         let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
         mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
 
-        // Any non-Off level maps to 0x20 on Icom
         let set_cmd = commands::cmd_set_attenuator(IC7610_ADDR, 0x20);
         mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
 
         let rig = make_test_rig(mock);
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db12)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_set_attenuator_db6_also_maps_to_0x20() {
-        let mut mock = MockTransport::new();
-
-        let select_cmd = commands::cmd_select_main_sub(IC7610_ADDR, ReceiverId::VFO_A);
-        mock.expect(&select_cmd, &echo_and_response(&select_cmd, &ack_frame()));
-
-        // Db6 also maps to 0x20 (Icom attenuator is binary)
-        let set_cmd = commands::cmd_set_attenuator(IC7610_ADDR, 0x20);
-        mock.expect(&set_cmd, &echo_and_response(&set_cmd, &ack_frame()));
-
-        let rig = make_test_rig(mock);
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db6)
-            .await
-            .unwrap();
+        rig.set_attenuator(ReceiverId::VFO_A, 20).await.unwrap();
     }
 
     #[tokio::test]
@@ -2028,16 +1967,13 @@ mod tests {
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();
 
-        rig.set_attenuator(ReceiverId::VFO_A, AttenuatorLevel::Db18)
-            .await
-            .unwrap();
+        rig.set_attenuator(ReceiverId::VFO_A, 20).await.unwrap();
 
         let event = event_rx.try_recv().unwrap();
         match event {
-            RigEvent::AttenuatorChanged { receiver, level } => {
+            RigEvent::AttenuatorChanged { receiver, db } => {
                 assert_eq!(receiver, ReceiverId::VFO_A);
-                // Event should emit the user-requested level, not the mapped binary
-                assert_eq!(level, AttenuatorLevel::Db18);
+                assert_eq!(db, 20);
             }
             other => panic!("expected AttenuatorChanged, got {other:?}"),
         }
@@ -2053,13 +1989,8 @@ mod tests {
 
         // Read RIT on/off: rig responds with RIT on (0x01)
         let on_cmd = commands::cmd_read_rit_on(IC7610_ADDR);
-        let on_response = civ::encode_frame(
-            CONTROLLER_ADDR,
-            IC7610_ADDR,
-            0x21,
-            Some(0x01),
-            &[0x01],
-        );
+        let on_response =
+            civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x21, Some(0x01), &[0x01]);
         mock.expect(&on_cmd, &echo_and_response(&on_cmd, &on_response));
 
         // Read RIT offset: rig responds with +150 Hz
@@ -2072,7 +2003,10 @@ mod tests {
             Some(0x02),
             &[0x00, 0x01, 0x50],
         );
-        mock.expect(&offset_cmd, &echo_and_response(&offset_cmd, &offset_response));
+        mock.expect(
+            &offset_cmd,
+            &echo_and_response(&offset_cmd, &offset_response),
+        );
 
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();
@@ -2128,13 +2062,8 @@ mod tests {
 
         // Read XIT on/off: rig responds with XIT off (0x00)
         let on_cmd = commands::cmd_read_xit_on(IC7610_ADDR);
-        let on_response = civ::encode_frame(
-            CONTROLLER_ADDR,
-            IC7610_ADDR,
-            0x21,
-            Some(0x03),
-            &[0x00],
-        );
+        let on_response =
+            civ::encode_frame(CONTROLLER_ADDR, IC7610_ADDR, 0x21, Some(0x03), &[0x00]);
         mock.expect(&on_cmd, &echo_and_response(&on_cmd, &on_response));
 
         // Read XIT offset: rig responds with +500 Hz
@@ -2146,7 +2075,10 @@ mod tests {
             Some(0x04),
             &[0x00, 0x05, 0x00],
         );
-        mock.expect(&offset_cmd, &echo_and_response(&offset_cmd, &offset_response));
+        mock.expect(
+            &offset_cmd,
+            &echo_and_response(&offset_cmd, &offset_response),
+        );
 
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();

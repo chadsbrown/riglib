@@ -425,13 +425,7 @@ pub fn cmd_read_agc_mode(addr: u8) -> Vec<u8> {
 ///   On older rigs (IC-785x, IC-7800, IC-7700, IC-7600) 0x00 = off.
 ///   On SDR-generation rigs 0x00 is not supported via this command.
 pub fn cmd_set_agc_mode(addr: u8, mode: u8) -> Vec<u8> {
-    encode_frame(
-        addr,
-        CONTROLLER_ADDR,
-        CMD_FUNC,
-        Some(SUB_AGC_MODE),
-        &[mode],
-    )
+    encode_frame(addr, CONTROLLER_ADDR, CMD_FUNC, Some(SUB_AGC_MODE), &[mode])
 }
 
 /// Build a CI-V "read AGC time constant" command.
@@ -479,7 +473,13 @@ pub fn cmd_set_agc_time_constant(addr: u8, value: u8) -> Vec<u8> {
 /// Sends command 0x21 sub-command 0x01 with no data. The rig responds with
 /// a single byte: 0x00 = off, 0x01 = on.
 pub fn cmd_read_rit_on(addr: u8) -> Vec<u8> {
-    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_RIT_ON_OFF), &[])
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_RIT_XIT,
+        Some(SUB_RIT_ON_OFF),
+        &[],
+    )
 }
 
 /// Build a CI-V "set RIT on/off" command.
@@ -492,7 +492,13 @@ pub fn cmd_read_rit_on(addr: u8) -> Vec<u8> {
 /// * `on` - `true` to enable RIT, `false` to disable
 pub fn cmd_set_rit_on(addr: u8, on: bool) -> Vec<u8> {
     let data = if on { 0x01u8 } else { 0x00u8 };
-    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_RIT_ON_OFF), &[data])
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_RIT_XIT,
+        Some(SUB_RIT_ON_OFF),
+        &[data],
+    )
 }
 
 /// Build a CI-V "read RIT offset" command.
@@ -501,7 +507,13 @@ pub fn cmd_set_rit_on(addr: u8, on: bool) -> Vec<u8> {
 /// a sign byte (0x00 = positive, 0x01 = negative) followed by 2 bytes of
 /// BCD-encoded magnitude (e.g., +150 Hz = `0x00 0x01 0x50`).
 pub fn cmd_read_rit_offset(addr: u8) -> Vec<u8> {
-    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_RIT_OFFSET), &[])
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_RIT_XIT,
+        Some(SUB_RIT_OFFSET),
+        &[],
+    )
 }
 
 /// Build a CI-V "set RIT offset" command.
@@ -515,7 +527,13 @@ pub fn cmd_read_rit_offset(addr: u8) -> Vec<u8> {
 /// * `offset_hz` - RIT offset in hertz (positive or negative)
 pub fn cmd_set_rit_offset(addr: u8, offset_hz: i32) -> Vec<u8> {
     let data = encode_rit_xit_offset(offset_hz);
-    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_RIT_OFFSET), &data)
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_RIT_XIT,
+        Some(SUB_RIT_OFFSET),
+        &data,
+    )
 }
 
 /// Build a CI-V "read XIT on/off" command.
@@ -523,7 +541,13 @@ pub fn cmd_set_rit_offset(addr: u8, offset_hz: i32) -> Vec<u8> {
 /// Sends command 0x21 sub-command 0x03 with no data. The rig responds with
 /// a single byte: 0x00 = off, 0x01 = on.
 pub fn cmd_read_xit_on(addr: u8) -> Vec<u8> {
-    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_XIT_ON_OFF), &[])
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_RIT_XIT,
+        Some(SUB_XIT_ON_OFF),
+        &[],
+    )
 }
 
 /// Build a CI-V "set XIT on/off" command.
@@ -536,7 +560,13 @@ pub fn cmd_read_xit_on(addr: u8) -> Vec<u8> {
 /// * `on` - `true` to enable XIT, `false` to disable
 pub fn cmd_set_xit_on(addr: u8, on: bool) -> Vec<u8> {
     let data = if on { 0x01u8 } else { 0x00u8 };
-    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_XIT_ON_OFF), &[data])
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_RIT_XIT,
+        Some(SUB_XIT_ON_OFF),
+        &[data],
+    )
 }
 
 /// Build a CI-V "read XIT offset" command.
@@ -545,7 +575,13 @@ pub fn cmd_set_xit_on(addr: u8, on: bool) -> Vec<u8> {
 /// a sign byte (0x00 = positive, 0x01 = negative) followed by 2 bytes of
 /// BCD-encoded magnitude.
 pub fn cmd_read_xit_offset(addr: u8) -> Vec<u8> {
-    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_XIT_OFFSET), &[])
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_RIT_XIT,
+        Some(SUB_XIT_OFFSET),
+        &[],
+    )
 }
 
 /// Build a CI-V "set XIT offset" command.
@@ -559,7 +595,13 @@ pub fn cmd_read_xit_offset(addr: u8) -> Vec<u8> {
 /// * `offset_hz` - XIT offset in hertz (positive or negative)
 pub fn cmd_set_xit_offset(addr: u8, offset_hz: i32) -> Vec<u8> {
     let data = encode_rit_xit_offset(offset_hz);
-    encode_frame(addr, CONTROLLER_ADDR, CMD_RIT_XIT, Some(SUB_XIT_OFFSET), &data)
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_RIT_XIT,
+        Some(SUB_XIT_OFFSET),
+        &data,
+    )
 }
 
 // ---------------------------------------------------------------
@@ -579,7 +621,13 @@ pub fn cmd_set_xit_offset(addr: u8, offset_hz: i32) -> Vec<u8> {
 /// * `text` - ASCII text to send as CW (max 30 characters per frame)
 pub fn cmd_send_cw_message(addr: u8, text: &str) -> Vec<u8> {
     let text_bytes: Vec<u8> = text.as_bytes().iter().copied().take(30).collect();
-    encode_frame(addr, CONTROLLER_ADDR, CMD_SEND_CW_MESSAGE, None, &text_bytes)
+    encode_frame(
+        addr,
+        CONTROLLER_ADDR,
+        CMD_SEND_CW_MESSAGE,
+        None,
+        &text_bytes,
+    )
 }
 
 /// Build a CI-V "stop CW message" command.
@@ -772,13 +820,7 @@ pub fn cmd_read_preamp(addr: u8) -> Vec<u8> {
 /// * `level` - Preamp level: 0x00 = off, 0x01 = preamp 1, 0x02 = preamp 2.
 ///   Available levels are model-dependent (gated in the rig layer).
 pub fn cmd_set_preamp(addr: u8, level: u8) -> Vec<u8> {
-    encode_frame(
-        addr,
-        CONTROLLER_ADDR,
-        CMD_FUNC,
-        Some(SUB_PREAMP),
-        &[level],
-    )
+    encode_frame(addr, CONTROLLER_ADDR, CMD_FUNC, Some(SUB_PREAMP), &[level])
 }
 
 /// Parse a preamp response from CI-V data bytes.
@@ -1534,14 +1576,7 @@ mod tests {
         let bytes = cmd_read_antenna(IC7610_ADDR);
         assert_eq!(
             bytes,
-            vec![
-                0xFE,
-                0xFE,
-                IC7610_ADDR,
-                CONTROLLER_ADDR,
-                CMD_ANTENNA,
-                0xFD
-            ]
+            vec![0xFE, 0xFE, IC7610_ADDR, CONTROLLER_ADDR, CMD_ANTENNA, 0xFD]
         );
     }
 
@@ -2476,10 +2511,7 @@ mod tests {
         for offset in [-9999, -1234, -300, -1, 0, 1, 150, 500, 9999] {
             let encoded = encode_rit_xit_offset(offset);
             let decoded = parse_rit_xit_offset_response(&encoded, "RIT").unwrap();
-            assert_eq!(
-                decoded, offset,
-                "round-trip failed for offset {offset}"
-            );
+            assert_eq!(decoded, offset, "round-trip failed for offset {offset}");
         }
     }
 
@@ -2505,8 +2537,16 @@ mod tests {
         assert_eq!(
             bytes,
             vec![
-                0xFE, 0xFE, IC7610_ADDR, CONTROLLER_ADDR, 0x17,
-                0x43, 0x51, 0x20, 0x43, 0x51,
+                0xFE,
+                0xFE,
+                IC7610_ADDR,
+                CONTROLLER_ADDR,
+                0x17,
+                0x43,
+                0x51,
+                0x20,
+                0x43,
+                0x51,
                 0xFD
             ]
         );
@@ -2540,11 +2580,7 @@ mod tests {
         let bytes = cmd_stop_cw_message(IC7610_ADDR);
         assert_eq!(
             bytes,
-            vec![
-                0xFE, 0xFE, IC7610_ADDR, CONTROLLER_ADDR, 0x17,
-                0xFF,
-                0xFD
-            ]
+            vec![0xFE, 0xFE, IC7610_ADDR, CONTROLLER_ADDR, 0x17, 0xFF, 0xFD]
         );
     }
 

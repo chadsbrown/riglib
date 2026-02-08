@@ -711,9 +711,9 @@ pub fn parse_agc_response_k3(data: &str) -> Result<(u16, bool)> {
             data.len()
         )));
     }
-    let speed: u16 = data[0..3]
-        .parse()
-        .map_err(|e| Error::Protocol(format!("invalid AGC speed value: {:?} ({e})", &data[0..3])))?;
+    let speed: u16 = data[0..3].parse().map_err(|e| {
+        Error::Protocol(format!("invalid AGC speed value: {:?} ({e})", &data[0..3]))
+    })?;
     let agc_on = if data.len() == 4 {
         &data[3..4] == "1"
     } else {
@@ -737,9 +737,12 @@ pub fn parse_agc_response_k4(data: &str) -> Result<u8> {
             "expected '$n' for K4 AGC response, got: {data:?}"
         )));
     }
-    let val: u8 = data[1..2]
-        .parse()
-        .map_err(|e| Error::Protocol(format!("invalid K4 AGC mode digit: {:?} ({e})", &data[1..2])))?;
+    let val: u8 = data[1..2].parse().map_err(|e| {
+        Error::Protocol(format!(
+            "invalid K4 AGC mode digit: {:?} ({e})",
+            &data[1..2]
+        ))
+    })?;
     Ok(val)
 }
 
@@ -801,9 +804,12 @@ pub fn parse_attenuator_response_k4(data: &str) -> Result<u8> {
             "expected '$n' for K4 attenuator response, got: {data:?}"
         )));
     }
-    let val: u8 = data[1..2]
-        .parse()
-        .map_err(|e| Error::Protocol(format!("invalid K4 attenuator level: {:?} ({e})", &data[1..2])))?;
+    let val: u8 = data[1..2].parse().map_err(|e| {
+        Error::Protocol(format!(
+            "invalid K4 attenuator level: {:?} ({e})",
+            &data[1..2]
+        ))
+    })?;
     Ok(val)
 }
 
@@ -910,11 +916,9 @@ pub fn parse_rit_xit_offset_response(data: &str) -> Result<i32> {
     };
 
     let digits = &data[1..6];
-    let abs_offset: i32 = digits.parse().map_err(|e| {
-        Error::Protocol(format!(
-            "invalid RIT/XIT offset digits: {digits:?} ({e})"
-        ))
-    })?;
+    let abs_offset: i32 = digits
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid RIT/XIT offset digits: {digits:?} ({e})")))?;
 
     Ok(sign * abs_offset)
 }
@@ -2172,19 +2176,13 @@ mod tests {
     #[test]
     fn cmd_send_cw_message_bytes() {
         // "TEST" + 20 spaces padding = 24 chars, plus 1 space separator
-        assert_eq!(
-            cmd_send_cw_message("TEST"),
-            b"KY TEST                    ;"
-        );
+        assert_eq!(cmd_send_cw_message("TEST"), b"KY TEST                    ;");
     }
 
     #[test]
     fn cmd_send_cw_message_empty() {
         // Empty string pads to 24 spaces
-        assert_eq!(
-            cmd_send_cw_message(""),
-            b"KY                         ;"
-        );
+        assert_eq!(cmd_send_cw_message(""), b"KY                         ;");
     }
 
     #[test]
@@ -2214,10 +2212,7 @@ mod tests {
     #[test]
     fn cmd_stop_cw_message_bytes() {
         // "KY" + 25 spaces + ";"
-        assert_eq!(
-            cmd_stop_cw_message(),
-            b"KY                         ;"
-        );
+        assert_eq!(cmd_stop_cw_message(), b"KY                         ;");
     }
 
     #[test]

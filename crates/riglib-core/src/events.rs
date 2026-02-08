@@ -4,7 +4,7 @@
 //! when the radio's state changes. Contest loggers and panadapter displays subscribe
 //! to these events for real-time UI updates without polling.
 
-use crate::types::{AgcMode, AttenuatorLevel, Mode, PreampLevel, ReceiverId};
+use crate::types::{AgcMode, Mode, PreampLevel, ReceiverId};
 
 /// An event emitted by a rig driver when radio state changes.
 ///
@@ -81,8 +81,8 @@ pub enum RigEvent {
     AttenuatorChanged {
         /// Which receiver changed attenuator level.
         receiver: ReceiverId,
-        /// New attenuator level.
-        level: AttenuatorLevel,
+        /// New attenuator level in dB (0 = off).
+        db: u8,
     },
 
     /// The CW keyer speed changed.

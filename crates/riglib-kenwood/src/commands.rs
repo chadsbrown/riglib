@@ -871,11 +871,9 @@ pub fn parse_rit_xit_offset_response(data: &str) -> Result<i32> {
     };
 
     let digits = &data[1..6];
-    let abs_offset: i32 = digits.parse().map_err(|e| {
-        Error::Protocol(format!(
-            "invalid RIT/XIT offset digits: {digits:?} ({e})"
-        ))
-    })?;
+    let abs_offset: i32 = digits
+        .parse()
+        .map_err(|e| Error::Protocol(format!("invalid RIT/XIT offset digits: {digits:?} ({e})")))?;
 
     Ok(sign * abs_offset)
 }
