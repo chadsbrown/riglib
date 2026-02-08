@@ -10,9 +10,9 @@ low-latency, reliable rig control matters.
 **Status: early development (0.1.0).** Protocol implementations, model
 definitions, and serial/TCP transports are in place across all five
 manufacturers. The API is functional but has not been extensively validated
-against real hardware. Use at your own risk.
+against real hardware. USE AT YOUR OWN RISK.
 
-## Supported Rigs
+## Supported Rigs (In theory, that is.  Most of these are completely untested)
 
 36 models across 5 manufacturers:
 
