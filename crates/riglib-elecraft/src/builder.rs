@@ -166,22 +166,15 @@ impl ElecraftBuilder {
     ///
     /// Requires that [`serial_port()`](Self::serial_port) has been called.
     /// The baud rate defaults to the model's default if not overridden.
-    ///
-    /// This is the normal production path. The serial transport is not
-    /// yet implemented in `riglib-transport`, so this method returns
-    /// [`Error::Unsupported`] for now.
     pub async fn build(self) -> Result<ElecraftRig> {
-        let _port = self
+        let port = self
             .serial_port
             .as_ref()
             .ok_or_else(|| Error::InvalidParameter("serial_port is required for build()".into()))?;
-        let _baud = self.baud_rate.unwrap_or(self.model.default_baud_rate);
+        let baud = self.baud_rate.unwrap_or(self.model.default_baud_rate);
 
-        // TODO: Construct a real SerialTransport here once riglib-transport
-        // provides one.
-        Err(Error::Unsupported(
-            "serial transport not yet implemented; use build_with_transport() for testing".into(),
-        ))
+        let transport = riglib_transport::SerialTransport::open(port, baud).await?;
+        self.build_with_transport(Box::new(transport)).await
     }
 }
 
