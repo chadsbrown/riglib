@@ -2095,6 +2095,10 @@ fn display_level_meter(peak: &[f32], rms_accum: &[f64], sample_count: &[u64], ch
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     let cli = Cli::parse();
 
     // Validate option combinations early.

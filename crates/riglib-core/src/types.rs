@@ -452,6 +452,24 @@ pub enum KeyLine {
     Rts,
 }
 
+/// How SET commands are handled on text-protocol rigs (Yaesu, Kenwood, Elecraft).
+///
+/// Many transceivers send zero bytes in response to SET commands (fire-and-forget).
+/// This enum controls whether the driver verifies the value took effect by issuing
+/// a follow-up GET, or trusts the SET and moves on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SetCommandMode {
+    /// Send the SET command, then issue the corresponding GET to confirm
+    /// the value took effect. This is the safe default (~20ms overhead per
+    /// SET from the fast GET round-trip).
+    #[default]
+    Verify,
+    /// Send the SET command with a brief drain only. No read-back.
+    /// Maximum throughput for contest logging (matches hamlib's
+    /// `fast_set_commands` mode).
+    NoVerify,
+}
+
 /// Capabilities and limits of a specific rig model.
 ///
 /// Obtained via [`crate::rig::Rig::capabilities()`]. Drivers populate this

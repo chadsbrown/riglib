@@ -47,6 +47,7 @@ pub struct KenwoodRig {
     info: RigInfo,
     ptt_method: PttMethod,
     key_line: KeyLine,
+    set_command_mode: SetCommandMode,
     /// Handle to the background AI transceive reader task, if active.
     transceive_handle: Mutex<Option<TransceiveHandle>>,
     /// USB audio device name (e.g. "USB Audio CODEC"). When set, this rig
@@ -73,6 +74,7 @@ impl KenwoodRig {
         command_timeout: Duration,
         ptt_method: PttMethod,
         key_line: KeyLine,
+        set_command_mode: SetCommandMode,
         #[cfg(feature = "audio")] audio_device_name: Option<String>,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(256);
@@ -91,6 +93,7 @@ impl KenwoodRig {
             info,
             ptt_method,
             key_line,
+            set_command_mode,
             transceive_handle: Mutex::new(None),
             #[cfg(feature = "audio")]
             audio_device_name,
@@ -318,13 +321,114 @@ impl KenwoodRig {
         Err(Error::Timeout)
     }
 
-    /// Send a CAT command that produces no response data (set commands).
+    /// Send a SET command (fire-and-forget).
     ///
-    /// Kenwood set commands typically echo back the command as confirmation.
-    /// We send the command and wait for the echoed response.
+    /// In **NoVerify** mode: sends the command, then does a brief 50ms drain
+    /// to catch echo bytes and `?;` errors without adding significant latency.
+    /// Timeout during drain is treated as success (the radio sent nothing back).
+    ///
+    /// In **Verify** mode: sends the command with no drain. The caller is
+    /// expected to issue a follow-up GET to confirm the value took effect.
     async fn execute_set_command(&self, cmd: &[u8]) -> Result<()> {
-        let _ = self.execute_command(cmd).await?;
+        let maybe_sender = {
+            let guard = self.transceive_handle.lock().await;
+            guard.as_ref().map(|h| h.cmd_tx.clone())
+        };
+
+        if let Some(cmd_tx) = maybe_sender {
+            self.execute_set_command_via_channel(cmd, cmd_tx).await
+        } else {
+            self.execute_set_command_direct(cmd).await
+        }
+    }
+
+    /// Send a SET command directly on the transport (non-AI mode).
+    async fn execute_set_command_direct(&self, cmd: &[u8]) -> Result<()> {
+        let mut transport = self.transport.lock().await;
+        transport.send(cmd).await?;
+
+        if self.set_command_mode == SetCommandMode::NoVerify {
+            let drain_timeout = Duration::from_millis(50);
+            let mut buf = [0u8; 256];
+            let mut drain_buf = Vec::new();
+
+            loop {
+                match tokio::time::timeout(
+                    drain_timeout,
+                    transport.receive(&mut buf, drain_timeout),
+                )
+                .await
+                {
+                    Ok(Ok(n)) => {
+                        drain_buf.extend_from_slice(&buf[..n]);
+                        match protocol::decode_response(&drain_buf) {
+                            DecodeResult::Error(_) => {
+                                return Err(Error::Protocol(
+                                    "rig returned error response (?;)".into(),
+                                ));
+                            }
+                            DecodeResult::Response { .. } => break,
+                            DecodeResult::Incomplete => {}
+                        }
+                    }
+                    Ok(Err(Error::Timeout)) | Err(_) => {
+                        if !drain_buf.is_empty() {
+                            if let DecodeResult::Error(_) =
+                                protocol::decode_response(&drain_buf)
+                            {
+                                return Err(Error::Protocol(
+                                    "rig returned error response (?;)".into(),
+                                ));
+                            }
+                        }
+                        break;
+                    }
+                    Ok(Err(e)) => return Err(e),
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// Send a SET command through the AI transceive channel.
+    async fn execute_set_command_via_channel(
+        &self,
+        cmd: &[u8],
+        cmd_tx: tokio::sync::mpsc::Sender<CommandRequest>,
+    ) -> Result<()> {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+        let request = CommandRequest::CatCommand {
+            cmd_bytes: cmd.to_vec(),
+            response_tx,
+        };
+
+        cmd_tx
+            .send(request)
+            .await
+            .map_err(|_| Error::NotConnected)?;
+
+        match tokio::time::timeout(
+            Duration::from_millis(if self.set_command_mode == SetCommandMode::NoVerify {
+                100
+            } else {
+                50
+            }),
+            response_rx,
+        )
+        .await
+        {
+            Ok(Ok(Ok(_))) => Ok(()),
+            Ok(Ok(Err(e))) => {
+                if matches!(e, Error::Protocol(_)) {
+                    Err(e)
+                } else {
+                    Ok(())
+                }
+            }
+            Ok(Err(_)) => Err(Error::NotConnected),
+            Err(_) => Ok(()),
+        }
     }
 
     /// Convert a raw Kenwood S-meter value (0-30 typical) to dBm.
@@ -416,10 +520,19 @@ impl Rig for KenwoodRig {
         };
         debug!(receiver = %rx, freq_hz, "setting frequency");
         self.execute_set_command(&cmd).await?;
-        let _ = self.event_tx.send(RigEvent::FrequencyChanged {
-            receiver: rx,
-            freq_hz,
-        });
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_frequency(rx).await?;
+            if actual != freq_hz {
+                return Err(Error::Protocol(format!(
+                    "set_frequency verify failed: expected {freq_hz}, got {actual}"
+                )));
+            }
+        } else {
+            let _ = self.event_tx.send(RigEvent::FrequencyChanged {
+                receiver: rx,
+                freq_hz,
+            });
+        }
         Ok(())
     }
 
@@ -439,10 +552,19 @@ impl Rig for KenwoodRig {
         let cmd = commands::cmd_set_mode(&mode);
         debug!(%mode, "setting mode");
         self.execute_set_command(&cmd).await?;
-        let _ = self.event_tx.send(RigEvent::ModeChanged {
-            receiver: _rx,
-            mode,
-        });
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_mode(_rx).await?;
+            if actual != mode {
+                return Err(Error::Protocol(format!(
+                    "set_mode verify failed: expected {mode}, got {actual}"
+                )));
+            }
+        } else {
+            let _ = self.event_tx.send(RigEvent::ModeChanged {
+                receiver: _rx,
+                mode,
+            });
+        }
         Ok(())
     }
 
@@ -518,9 +640,20 @@ impl Rig for KenwoodRig {
                 "power {watts}W out of range 0-{max}W"
             )));
         }
-        let cmd = commands::cmd_set_power(watts.round() as u16);
+        let watts_int = watts.round() as u16;
+        let cmd = commands::cmd_set_power(watts_int);
         debug!(watts, "setting power");
-        self.execute_set_command(&cmd).await
+        self.execute_set_command(&cmd).await?;
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_power().await?;
+            let expected = watts_int as f32;
+            if (actual - expected).abs() > 1.0 {
+                return Err(Error::Protocol(format!(
+                    "set_power verify failed: expected {expected}W, got {actual}W"
+                )));
+            }
+        }
+        Ok(())
     }
 
     async fn get_s_meter(&self, rx: ReceiverId) -> Result<f32> {
@@ -569,6 +702,14 @@ impl Rig for KenwoodRig {
         debug!(on, "setting split");
         self.execute_set_command(&fr_cmd).await?;
         self.execute_set_command(&ft_cmd).await?;
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_split().await?;
+            if actual != on {
+                return Err(Error::Protocol(format!(
+                    "set_split verify failed: expected {on}, got {actual}"
+                )));
+            }
+        }
         let _ = self.event_tx.send(RigEvent::SplitChanged { on });
         Ok(())
     }
@@ -609,7 +750,16 @@ impl Rig for KenwoodRig {
         let cmd = commands::cmd_set_cw_speed(wpm);
         debug!(wpm, "setting CW speed");
         self.execute_set_command(&cmd).await?;
-        let _ = self.event_tx.send(RigEvent::CwSpeedChanged { wpm });
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_cw_speed().await?;
+            if actual != wpm {
+                return Err(Error::Protocol(format!(
+                    "set_cw_speed verify failed: expected {wpm}, got {actual}"
+                )));
+            }
+        } else {
+            let _ = self.event_tx.send(RigEvent::CwSpeedChanged { wpm });
+        }
         Ok(())
     }
 
@@ -679,7 +829,6 @@ impl Rig for KenwoodRig {
         debug!(receiver = %rx, ?mode, "setting AGC mode");
         match self.model.agc_command_style {
             AgcCommandStyle::GcSimple => {
-                // TS-890S GC: 0=Off, 1=Slow, 2=Medium, 3=Fast
                 let value = match mode {
                     AgcMode::Off => 0,
                     AgcMode::Slow => 1,
@@ -701,7 +850,6 @@ impl Rig for KenwoodRig {
                 self.execute_set_command(&cmd).await?;
             }
             AgcCommandStyle::GtTimeConstant => {
-                // TS-590S/SG GT: 0=Off, 5=Fast, 10=Medium, 20=Slow
                 let tc = match mode {
                     AgcMode::Off => 0,
                     AgcMode::Fast => 5,
@@ -712,9 +860,18 @@ impl Rig for KenwoodRig {
                 self.execute_set_command(&cmd).await?;
             }
         }
-        let _ = self
-            .event_tx
-            .send(RigEvent::AgcChanged { receiver: rx, mode });
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_agc(rx).await?;
+            if actual != mode {
+                return Err(Error::Protocol(format!(
+                    "set_agc verify failed: expected {mode}, got {actual}"
+                )));
+            }
+        } else {
+            let _ = self
+                .event_tx
+                .send(RigEvent::AgcChanged { receiver: rx, mode });
+        }
         Ok(())
     }
 
@@ -757,10 +914,19 @@ impl Rig for KenwoodRig {
         let cmd = commands::cmd_set_preamp(value);
         debug!(receiver = %rx, ?level, "setting preamp");
         self.execute_set_command(&cmd).await?;
-        let _ = self.event_tx.send(RigEvent::PreampChanged {
-            receiver: rx,
-            level,
-        });
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_preamp(rx).await?;
+            if actual != level {
+                return Err(Error::Protocol(format!(
+                    "set_preamp verify failed: expected {level}, got {actual}"
+                )));
+            }
+        } else {
+            let _ = self.event_tx.send(RigEvent::PreampChanged {
+                receiver: rx,
+                level,
+            });
+        }
         Ok(())
     }
 
@@ -779,9 +945,18 @@ impl Rig for KenwoodRig {
         let cmd = commands::cmd_set_attenuator(db);
         debug!(receiver = %rx, db, "setting attenuator");
         self.execute_set_command(&cmd).await?;
-        let _ = self
-            .event_tx
-            .send(RigEvent::AttenuatorChanged { receiver: rx, db });
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_attenuator(rx).await?;
+            if actual != db {
+                return Err(Error::Protocol(format!(
+                    "set_attenuator verify failed: expected {db}dB, got {actual}dB"
+                )));
+            }
+        } else {
+            let _ = self
+                .event_tx
+                .send(RigEvent::AttenuatorChanged { receiver: rx, db });
+        }
         Ok(())
     }
 
@@ -915,7 +1090,16 @@ impl Rig for KenwoodRig {
         };
         let cmd = commands::cmd_set_antenna(ant);
         debug!(%port, "setting antenna port");
-        self.execute_set_command(&cmd).await
+        self.execute_set_command(&cmd).await?;
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_antenna(_receiver).await?;
+            if actual != port {
+                return Err(Error::Protocol(format!(
+                    "set_antenna verify failed: expected {port}, got {actual}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     async fn send_cw_message(&self, message: &str) -> Result<()> {
@@ -1067,6 +1251,7 @@ mod tests {
             Duration::from_millis(500),
             PttMethod::Cat,
             KeyLine::None,
+            SetCommandMode::NoVerify,
             #[cfg(feature = "audio")]
             None,
         )
@@ -1083,6 +1268,7 @@ mod tests {
             Duration::from_millis(500),
             PttMethod::Cat,
             KeyLine::None,
+            SetCommandMode::NoVerify,
             #[cfg(feature = "audio")]
             None,
         )
@@ -1692,6 +1878,7 @@ mod tests {
             Duration::from_millis(500),
             PttMethod::Cat,
             KeyLine::None,
+            SetCommandMode::NoVerify,
             #[cfg(feature = "audio")]
             None,
         )
@@ -2505,6 +2692,7 @@ mod tests {
                 Duration::from_millis(500),
                 PttMethod::Cat,
                 KeyLine::None,
+                SetCommandMode::NoVerify,
                 device_name.map(|s| s.to_string()),
             )
         }

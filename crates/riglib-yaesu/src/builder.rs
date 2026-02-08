@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use riglib_core::error::{Error, Result};
 use riglib_core::transport::Transport;
-use riglib_core::types::{KeyLine, PttMethod};
+use riglib_core::types::{KeyLine, PttMethod, SetCommandMode};
 
 use crate::models::YaesuModel;
 use crate::rig::YaesuRig;
@@ -49,6 +49,7 @@ pub struct YaesuBuilder {
     command_timeout: Duration,
     ptt_method: PttMethod,
     key_line: KeyLine,
+    set_command_mode: SetCommandMode,
     /// USB audio device name for audio streaming (e.g. "USB Audio CODEC").
     #[cfg(feature = "audio")]
     audio_device_name: Option<String>,
@@ -72,6 +73,7 @@ impl YaesuBuilder {
             command_timeout: Duration::from_millis(500),
             ptt_method: PttMethod::Cat,
             key_line: KeyLine::None,
+            set_command_mode: SetCommandMode::default(),
             #[cfg(feature = "audio")]
             audio_device_name: None,
         }
@@ -134,6 +136,14 @@ impl YaesuBuilder {
         self
     }
 
+    /// Set how SET commands are handled: [`Verify`](SetCommandMode::Verify)
+    /// (default) issues a follow-up GET to confirm, [`NoVerify`](SetCommandMode::NoVerify)
+    /// fires and forgets for maximum throughput.
+    pub fn set_command_mode(mut self, mode: SetCommandMode) -> Self {
+        self.set_command_mode = mode;
+        self
+    }
+
     /// Build a [`YaesuRig`] using a serial transport.
     ///
     /// Requires that [`serial_port()`](Self::serial_port) has been called.
@@ -176,6 +186,7 @@ impl YaesuBuilder {
             self.command_timeout,
             self.ptt_method,
             self.key_line,
+            self.set_command_mode,
             #[cfg(feature = "audio")]
             self.audio_device_name,
         ))

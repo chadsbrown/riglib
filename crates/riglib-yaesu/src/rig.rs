@@ -41,6 +41,7 @@ pub struct YaesuRig {
     info: RigInfo,
     ptt_method: PttMethod,
     key_line: KeyLine,
+    set_command_mode: SetCommandMode,
     /// Handle to the background AI transceive reader task, if active.
     transceive_handle: Mutex<Option<TransceiveHandle>>,
     /// USB audio device name (e.g. "USB Audio CODEC"). When set, this rig
@@ -67,6 +68,7 @@ impl YaesuRig {
         command_timeout: Duration,
         ptt_method: PttMethod,
         key_line: KeyLine,
+        set_command_mode: SetCommandMode,
         #[cfg(feature = "audio")] audio_device_name: Option<String>,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(256);
@@ -85,6 +87,7 @@ impl YaesuRig {
             info,
             ptt_method,
             key_line,
+            set_command_mode,
             transceive_handle: Mutex::new(None),
             #[cfg(feature = "audio")]
             audio_device_name,
@@ -213,6 +216,135 @@ impl YaesuRig {
             } else {
                 transport.set_rts(on).await
             }
+        }
+    }
+
+    /// Send a SET command (fire-and-forget).
+    ///
+    /// In **NoVerify** mode: sends the command, then does a brief 50ms drain
+    /// to catch echo bytes and `?;` errors without adding significant latency.
+    /// Timeout during drain is treated as success (the radio sent nothing back).
+    ///
+    /// In **Verify** mode: sends the command with no drain. The caller is
+    /// expected to issue a follow-up GET to confirm the value took effect.
+    /// Any stale echo bytes are consumed during the subsequent GET read.
+    async fn execute_set_command(&self, cmd: &[u8]) -> Result<()> {
+        let maybe_sender = {
+            let guard = self.transceive_handle.lock().await;
+            guard.as_ref().map(|h| h.cmd_tx.clone())
+        };
+
+        if let Some(cmd_tx) = maybe_sender {
+            self.execute_set_command_via_channel(cmd, cmd_tx).await
+        } else {
+            self.execute_set_command_direct(cmd).await
+        }
+    }
+
+    /// Send a SET command directly on the transport (non-AI mode).
+    async fn execute_set_command_direct(&self, cmd: &[u8]) -> Result<()> {
+        let mut transport = self.transport.lock().await;
+        transport.send(cmd).await?;
+
+        if self.set_command_mode == SetCommandMode::NoVerify {
+            // Brief drain: read for up to 50ms to catch echo bytes or ?; errors.
+            let drain_timeout = Duration::from_millis(50);
+            let mut buf = [0u8; 256];
+            let mut drain_buf = Vec::new();
+
+            loop {
+                match tokio::time::timeout(
+                    drain_timeout,
+                    transport.receive(&mut buf, drain_timeout),
+                )
+                .await
+                {
+                    Ok(Ok(n)) => {
+                        drain_buf.extend_from_slice(&buf[..n]);
+                        // Check if we got an error response.
+                        match protocol::decode_response(&drain_buf) {
+                            DecodeResult::Error(_) => {
+                                return Err(Error::Protocol(
+                                    "rig returned error response (?;)".into(),
+                                ));
+                            }
+                            DecodeResult::Response { .. } | DecodeResult::Incomplete => {
+                                // Got echo or partial data -- keep draining briefly.
+                                // If we got a complete response, we're done draining.
+                                if matches!(
+                                    protocol::decode_response(&drain_buf),
+                                    DecodeResult::Response { .. }
+                                ) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Ok(Err(Error::Timeout)) | Err(_) => {
+                        // Timeout is success for SET commands -- radio sent nothing back.
+                        // But check if we accumulated an error response.
+                        if !drain_buf.is_empty() {
+                            if let DecodeResult::Error(_) =
+                                protocol::decode_response(&drain_buf)
+                            {
+                                return Err(Error::Protocol(
+                                    "rig returned error response (?;)".into(),
+                                ));
+                            }
+                        }
+                        break;
+                    }
+                    Ok(Err(e)) => return Err(e),
+                }
+            }
+        }
+        // In Verify mode, no drain -- the caller will issue a GET next,
+        // which properly handles any stale echo bytes.
+        Ok(())
+    }
+
+    /// Send a SET command through the AI transceive channel.
+    async fn execute_set_command_via_channel(
+        &self,
+        cmd: &[u8],
+        cmd_tx: tokio::sync::mpsc::Sender<CommandRequest>,
+    ) -> Result<()> {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+        let request = CommandRequest::CatCommand {
+            cmd_bytes: cmd.to_vec(),
+            response_tx,
+        };
+
+        cmd_tx
+            .send(request)
+            .await
+            .map_err(|_| Error::NotConnected)?;
+
+        // For SET commands, the transceive reader will try to match a response.
+        // Timeout is OK -- it means the radio didn't echo (expected for SET).
+        match tokio::time::timeout(
+            Duration::from_millis(if self.set_command_mode == SetCommandMode::NoVerify {
+                100
+            } else {
+                50
+            }),
+            response_rx,
+        )
+        .await
+        {
+            Ok(Ok(Ok(_))) => Ok(()),       // Got an echo, consumed it
+            Ok(Ok(Err(e))) => {
+                // Check if it was a protocol error (?;)
+                if matches!(e, Error::Protocol(_)) {
+                    Err(e)
+                } else {
+                    // Other errors from the reader -- treat timeout as success
+                    Ok(())
+                }
+            }
+            Ok(Err(_)) => Err(Error::NotConnected), // oneshot sender dropped
+            Err(_) => Ok(()),              // timeout is success for SET commands
         }
     }
 
@@ -391,12 +523,21 @@ impl Rig for YaesuRig {
             commands::cmd_set_frequency_a(freq_hz)
         };
         debug!(receiver = %rx, freq_hz, "setting frequency");
-        // Yaesu echoes the command back as confirmation.
-        let _response = self.execute_command(&cmd).await?;
-        let _ = self.event_tx.send(RigEvent::FrequencyChanged {
-            receiver: rx,
-            freq_hz,
-        });
+        self.execute_set_command(&cmd).await?;
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_frequency(rx).await?;
+            if actual != freq_hz {
+                return Err(Error::Protocol(format!(
+                    "set_frequency verify failed: expected {freq_hz}, got {actual}"
+                )));
+            }
+            // get_frequency already emitted the event
+        } else {
+            let _ = self.event_tx.send(RigEvent::FrequencyChanged {
+                receiver: rx,
+                freq_hz,
+            });
+        }
         Ok(())
     }
 
@@ -422,10 +563,19 @@ impl Rig for YaesuRig {
             commands::cmd_set_mode_a(&mode)
         };
         debug!(receiver = %rx, %mode, "setting mode");
-        let _response = self.execute_command(&cmd).await?;
-        let _ = self
-            .event_tx
-            .send(RigEvent::ModeChanged { receiver: rx, mode });
+        self.execute_set_command(&cmd).await?;
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_mode(rx).await?;
+            if actual != mode {
+                return Err(Error::Protocol(format!(
+                    "set_mode verify failed: expected {mode}, got {actual}"
+                )));
+            }
+        } else {
+            let _ = self
+                .event_tx
+                .send(RigEvent::ModeChanged { receiver: rx, mode });
+        }
         Ok(())
     }
 
@@ -454,7 +604,7 @@ impl Rig for YaesuRig {
             PttMethod::Cat => {
                 let cmd = commands::cmd_set_ptt(on);
                 debug!(on, "setting PTT via CAT");
-                let _response = self.execute_command(&cmd).await?;
+                self.execute_set_command(&cmd).await?;
             }
             PttMethod::Dtr => {
                 debug!(on, "setting PTT via DTR");
@@ -487,7 +637,16 @@ impl Rig for YaesuRig {
         let watts_int = watts.round() as u16;
         let cmd = commands::cmd_set_power(watts_int);
         debug!(watts, watts_int, "setting power");
-        let _response = self.execute_command(&cmd).await?;
+        self.execute_set_command(&cmd).await?;
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_power().await?;
+            let expected = watts_int as f32;
+            if (actual - expected).abs() > 1.0 {
+                return Err(Error::Protocol(format!(
+                    "set_power verify failed: expected {expected}W, got {actual}W"
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -533,8 +692,19 @@ impl Rig for YaesuRig {
     async fn set_split(&self, on: bool) -> Result<()> {
         let cmd = commands::cmd_set_split(on);
         debug!(on, "setting split");
-        let _response = self.execute_command(&cmd).await?;
-        let _ = self.event_tx.send(RigEvent::SplitChanged { on });
+        self.execute_set_command(&cmd).await?;
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_split().await?;
+            if actual != on {
+                return Err(Error::Protocol(format!(
+                    "set_split verify failed: expected {on}, got {actual}"
+                )));
+            }
+            // get_split doesn't emit SplitChanged, so emit it here.
+            let _ = self.event_tx.send(RigEvent::SplitChanged { on });
+        } else {
+            let _ = self.event_tx.send(RigEvent::SplitChanged { on });
+        }
         Ok(())
     }
 
@@ -546,7 +716,7 @@ impl Rig for YaesuRig {
         let on = rx != ReceiverId::VFO_A;
         let cmd = commands::cmd_set_split(on);
         debug!(receiver = %rx, split = on, "setting TX receiver via split");
-        let _response = self.execute_command(&cmd).await?;
+        self.execute_set_command(&cmd).await?;
         let _ = self.event_tx.send(RigEvent::SplitChanged { on });
         Ok(())
     }
@@ -579,8 +749,17 @@ impl Rig for YaesuRig {
     async fn set_cw_speed(&self, wpm: u8) -> Result<()> {
         let cmd = commands::cmd_set_cw_speed(wpm);
         debug!(wpm, "setting CW speed");
-        let _response = self.execute_command(&cmd).await?;
-        let _ = self.event_tx.send(RigEvent::CwSpeedChanged { wpm });
+        self.execute_set_command(&cmd).await?;
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_cw_speed().await?;
+            if actual != wpm {
+                return Err(Error::Protocol(format!(
+                    "set_cw_speed verify failed: expected {wpm}, got {actual}"
+                )));
+            }
+        } else {
+            let _ = self.event_tx.send(RigEvent::CwSpeedChanged { wpm });
+        }
         Ok(())
     }
 
@@ -616,11 +795,20 @@ impl Rig for YaesuRig {
         };
         let cmd = commands::cmd_set_agc(value);
         debug!(?mode, "setting AGC mode");
-        let _response = self.execute_command(&cmd).await?;
-        let _ = self.event_tx.send(RigEvent::AgcChanged {
-            receiver: _rx,
-            mode,
-        });
+        self.execute_set_command(&cmd).await?;
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_agc(_rx).await?;
+            if actual != mode {
+                return Err(Error::Protocol(format!(
+                    "set_agc verify failed: expected {mode}, got {actual}"
+                )));
+            }
+        } else {
+            let _ = self.event_tx.send(RigEvent::AgcChanged {
+                receiver: _rx,
+                mode,
+            });
+        }
         Ok(())
     }
 
@@ -664,12 +852,20 @@ impl Rig for YaesuRig {
 
         let cmd = commands::cmd_set_preamp(value);
         debug!(receiver = %rx, %level, "setting preamp level");
-        let _response = self.execute_command(&cmd).await?;
-
-        let _ = self.event_tx.send(RigEvent::PreampChanged {
-            receiver: rx,
-            level,
-        });
+        self.execute_set_command(&cmd).await?;
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_preamp(rx).await?;
+            if actual != level {
+                return Err(Error::Protocol(format!(
+                    "set_preamp verify failed: expected {level}, got {actual}"
+                )));
+            }
+        } else {
+            let _ = self.event_tx.send(RigEvent::PreampChanged {
+                receiver: rx,
+                level,
+            });
+        }
         Ok(())
     }
 
@@ -709,11 +905,23 @@ impl Rig for YaesuRig {
 
         let cmd = commands::cmd_set_attenuator(value);
         debug!(receiver = %rx, db, "setting attenuator");
-        let _response = self.execute_command(&cmd).await?;
-
-        let _ = self
-            .event_tx
-            .send(RigEvent::AttenuatorChanged { receiver: rx, db });
+        self.execute_set_command(&cmd).await?;
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_attenuator(rx).await?;
+            // Yaesu is binary: we just check on/off matches.
+            let expected_on = db > 0;
+            let actual_on = actual > 0;
+            if expected_on != actual_on {
+                return Err(Error::Protocol(format!(
+                    "set_attenuator verify failed: expected {}dB, got {}dB",
+                    db, actual
+                )));
+            }
+        } else {
+            let _ = self
+                .event_tx
+                .send(RigEvent::AttenuatorChanged { receiver: rx, db });
+        }
         Ok(())
     }
 
@@ -732,11 +940,11 @@ impl Rig for YaesuRig {
         // Set the on/off state
         let cmd = commands::cmd_set_rit_on(enabled);
         debug!(enabled, offset_hz, "setting RIT");
-        let _response = self.execute_command(&cmd).await?;
+        self.execute_set_command(&cmd).await?;
 
         // Clear and set the shared offset register
         let clear_cmd = commands::cmd_rit_clear();
-        let _response = self.execute_command(&clear_cmd).await?;
+        self.execute_set_command(&clear_cmd).await?;
 
         if offset_hz != 0 {
             let abs_offset = offset_hz.unsigned_abs();
@@ -745,7 +953,7 @@ impl Rig for YaesuRig {
             } else {
                 commands::cmd_rit_down(abs_offset)
             };
-            let _response = self.execute_command(&offset_cmd).await?;
+            self.execute_set_command(&offset_cmd).await?;
         }
 
         let _ = self
@@ -768,11 +976,11 @@ impl Rig for YaesuRig {
     async fn set_xit(&self, enabled: bool, offset_hz: i32) -> Result<()> {
         let cmd = commands::cmd_set_xit_on(enabled);
         debug!(enabled, offset_hz, "setting XIT");
-        let _response = self.execute_command(&cmd).await?;
+        self.execute_set_command(&cmd).await?;
 
         // Clear and set the shared offset register (same commands as RIT)
         let clear_cmd = commands::cmd_rit_clear();
-        let _response = self.execute_command(&clear_cmd).await?;
+        self.execute_set_command(&clear_cmd).await?;
 
         if offset_hz != 0 {
             let abs_offset = offset_hz.unsigned_abs();
@@ -781,7 +989,7 @@ impl Rig for YaesuRig {
             } else {
                 commands::cmd_rit_down(abs_offset)
             };
-            let _response = self.execute_command(&offset_cmd).await?;
+            self.execute_set_command(&offset_cmd).await?;
         }
 
         let _ = self
@@ -793,15 +1001,13 @@ impl Rig for YaesuRig {
     async fn set_vfo_a_eq_b(&self, _receiver: ReceiverId) -> Result<()> {
         let cmd = commands::cmd_vfo_a_eq_b();
         debug!("setting VFO A=B");
-        let _response = self.execute_command(&cmd).await?;
-        Ok(())
+        self.execute_set_command(&cmd).await
     }
 
     async fn swap_vfo(&self, _receiver: ReceiverId) -> Result<()> {
         let cmd = commands::cmd_vfo_swap();
         debug!("swapping VFOs");
-        let _response = self.execute_command(&cmd).await?;
-        Ok(())
+        self.execute_set_command(&cmd).await
     }
 
     async fn get_antenna(&self, _receiver: ReceiverId) -> Result<AntennaPort> {
@@ -828,7 +1034,15 @@ impl Rig for YaesuRig {
         };
         let cmd = commands::cmd_set_antenna(ant);
         debug!(?port, "setting antenna port");
-        let _response = self.execute_command(&cmd).await?;
+        self.execute_set_command(&cmd).await?;
+        if self.set_command_mode == SetCommandMode::Verify {
+            let actual = self.get_antenna(_receiver).await?;
+            if actual != port {
+                return Err(Error::Protocol(format!(
+                    "set_antenna verify failed: expected {port}, got {actual}"
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -869,7 +1083,7 @@ impl Rig for YaesuRig {
 
             let send_cmd = commands::cmd_send_cw_message(chunk);
             debug!(chunk_index = i, chunk = %chunk, "sending CW chunk");
-            let _response = self.execute_command(&send_cmd).await?;
+            self.execute_set_command(&send_cmd).await?;
         }
 
         Ok(())
@@ -878,8 +1092,7 @@ impl Rig for YaesuRig {
     async fn stop_cw_message(&self) -> Result<()> {
         let cmd = commands::cmd_stop_cw_message();
         debug!("stopping CW message");
-        let _response = self.execute_command(&cmd).await?;
-        Ok(())
+        self.execute_set_command(&cmd).await
     }
 
     async fn enable_transceive(&self) -> Result<()> {
@@ -972,6 +1185,7 @@ mod tests {
     use riglib_test_harness::MockTransport;
 
     /// Helper to build a YaesuRig with a MockTransport and the FT-DX10 model.
+    /// Uses NoVerify mode so existing tests don't need extra GET expectations.
     fn make_test_rig(mock: MockTransport) -> YaesuRig {
         use crate::models::ft_dx10;
         YaesuRig::new(
@@ -982,6 +1196,7 @@ mod tests {
             Duration::from_millis(500),
             PttMethod::Cat,
             KeyLine::None,
+            SetCommandMode::NoVerify,
             #[cfg(feature = "audio")]
             None,
         )
@@ -999,6 +1214,7 @@ mod tests {
             Duration::from_millis(500),
             PttMethod::Cat,
             KeyLine::None,
+            SetCommandMode::NoVerify,
             #[cfg(feature = "audio")]
             None,
         )
@@ -1452,6 +1668,7 @@ mod tests {
             Duration::from_millis(100), // short timeout for test
             PttMethod::Cat,
             KeyLine::None,
+            SetCommandMode::NoVerify,
             #[cfg(feature = "audio")]
             None,
         );
@@ -2136,6 +2353,7 @@ mod tests {
                 Duration::from_millis(500),
                 PttMethod::Cat,
                 KeyLine::None,
+                SetCommandMode::NoVerify,
                 device_name.map(|s| s.to_string()),
             )
         }
