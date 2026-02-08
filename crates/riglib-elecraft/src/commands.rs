@@ -2217,12 +2217,12 @@ mod tests {
 
     #[test]
     fn parse_cw_buffer_ready() {
-        assert_eq!(parse_cw_buffer_response("0").unwrap(), true);
+        assert!(parse_cw_buffer_response("0").unwrap());
     }
 
     #[test]
     fn parse_cw_buffer_full() {
-        assert_eq!(parse_cw_buffer_response("1").unwrap(), false);
+        assert!(!parse_cw_buffer_response("1").unwrap());
     }
 
     #[test]
