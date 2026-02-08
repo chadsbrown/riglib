@@ -172,7 +172,6 @@ pub fn ft_891() -> YaesuModel {
 }
 
 /// FT-991A model definition.
-
 ///
 /// The FT-991A is Yaesu's all-band, all-mode transceiver covering HF through
 /// UHF. For riglib purposes we focus on HF + 6m CAT operation, but the rig
