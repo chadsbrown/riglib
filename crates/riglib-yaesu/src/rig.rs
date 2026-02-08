@@ -1866,10 +1866,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_set_preamp_2_on_dx10_returns_unsupported() {
-        // FT-DX10 has_preamp2 = false
+    async fn test_set_preamp_2_on_891_returns_unsupported() {
+        use crate::models::ft_891;
+        // FT-891 has_preamp2 = false
         let mock = MockTransport::new();
-        let rig = make_test_rig(mock);
+        let rig = YaesuRig::new(
+            Box::new(mock),
+            ft_891(),
+            false,
+            0,
+            Duration::from_millis(100),
+            PttMethod::Cat,
+            KeyLine::None,
+            SetCommandMode::NoVerify,
+            #[cfg(feature = "audio")]
+            None,
+        );
 
         let result = rig
             .set_preamp(ReceiverId::VFO_A, PreampLevel::Preamp2)

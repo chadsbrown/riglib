@@ -114,7 +114,7 @@ pub fn ft_dx10() -> YaesuModel {
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
             agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
-            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1, PreampLevel::Preamp2],
             attenuator_levels: vec![0, 6, 12, 18],
             antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
             has_cw_keyer: true,
@@ -124,7 +124,7 @@ pub fn ft_dx10() -> YaesuModel {
             has_transceive: true,
         },
         has_dual_vfo: true,
-        has_preamp2: false,
+        has_preamp2: true,
     }
 }
 
@@ -172,6 +172,7 @@ pub fn ft_891() -> YaesuModel {
 }
 
 /// FT-991A model definition.
+
 ///
 /// The FT-991A is Yaesu's all-band, all-mode transceiver covering HF through
 /// UHF. For riglib purposes we focus on HF + 6m CAT operation, but the rig
@@ -206,7 +207,7 @@ pub fn ft_991a() -> YaesuModel {
             ],
             max_power_watts: 100.0,
             agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
-            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1, PreampLevel::Preamp2],
             attenuator_levels: vec![0, 6, 12, 18],
             antenna_ports: vec![AntennaPort::Ant1],
             has_cw_keyer: true,
@@ -216,7 +217,7 @@ pub fn ft_991a() -> YaesuModel {
             has_transceive: true,
         },
         has_dual_vfo: true,
-        has_preamp2: false,
+        has_preamp2: true,
     }
 }
 
@@ -333,7 +334,7 @@ pub fn ft_710() -> YaesuModel {
             frequency_ranges: hf_6m_range(),
             max_power_watts: 100.0,
             agc_modes: vec![AgcMode::Off, AgcMode::Fast, AgcMode::Medium, AgcMode::Slow],
-            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1],
+            preamp_levels: vec![PreampLevel::Off, PreampLevel::Preamp1, PreampLevel::Preamp2],
             attenuator_levels: vec![0, 6, 12, 18],
             antenna_ports: vec![AntennaPort::Ant1],
             has_cw_keyer: true,
@@ -343,7 +344,7 @@ pub fn ft_710() -> YaesuModel {
             has_transceive: true,
         },
         has_dual_vfo: true,
-        has_preamp2: false,
+        has_preamp2: true,
     }
 }
 
