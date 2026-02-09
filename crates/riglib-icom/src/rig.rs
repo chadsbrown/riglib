@@ -73,6 +73,16 @@ pub struct IcomRig {
     audio_backend: Mutex<Option<riglib_transport::CpalAudioBackend>>,
 }
 
+impl Drop for IcomRig {
+    fn drop(&mut self) {
+        // Graceful: signal the IO loop to exit at the next select iteration.
+        self.io.cancel.cancel();
+        // Safety net: abort the task in case it's stuck in a transport read
+        // that doesn't respect the cancellation token (e.g. hung USB-serial).
+        self.io.task.abort();
+    }
+}
+
 impl IcomRig {
     /// Create a new `IcomRig` from its constituent parts.
     ///
@@ -1538,8 +1548,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_preamp_2_on_7300_returns_unsupported() {
-        // IC-7300 has_preamp2 = false
-        const IC7300_ADDR: u8 = 0x94;
         let mock = MockTransport::new();
 
         use crate::builder::IcomBuilder;
@@ -2197,5 +2205,82 @@ mod tests {
             // Calling stop_audio when no backend exists should succeed.
             rig.stop_audio().await.unwrap();
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Drop behavior (A.6)
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_drop_does_not_hang() {
+        let mock = MockTransport::new();
+        let rig = make_test_rig(mock).await;
+        drop(rig);
+        // If we reach here, the Drop impl completed without hanging.
+        // Give a moment for the IO task to exit.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    #[tokio::test]
+    async fn test_drop_during_pending_command() {
+        use crate::io::{IoConfig, spawn_io_task};
+        use tokio::sync::broadcast;
+
+        let mock = MockTransport::new();
+        // No expectations set — command will hang waiting for a response.
+
+        let (event_tx, _) = broadcast::channel(16);
+        let io = spawn_io_task(
+            Box::new(mock),
+            IoConfig {
+                civ_address: IC7610_ADDR,
+                ai_enabled: false,
+                command_timeout: std::time::Duration::from_millis(5000),
+                auto_retry: false,
+                max_retries: 0,
+                collision_recovery: false,
+            },
+            event_tx,
+        );
+
+        let cancel = io.cancel.clone();
+        let task_handle = &io.task;
+        let abort_handle = task_handle.abort_handle();
+
+        // Spawn a command that will hang (no response from mock).
+        let cmd = civ::encode_frame(IC7610_ADDR, CONTROLLER_ADDR, 0x03, None, &[]);
+        let cmd_task = tokio::spawn({
+            let io_cmd_tx = io.cmd_tx.clone();
+            let timeout = std::time::Duration::from_millis(5000);
+            async move {
+                use crate::io::RigIo;
+                use tokio_util::sync::CancellationToken;
+
+                // We need a RigIo to call .command() — build a temporary one.
+                let temp_io = RigIo {
+                    cmd_tx: io_cmd_tx,
+                    cancel: CancellationToken::new(),
+                    task: tokio::spawn(async {}),
+                };
+                temp_io.command(cmd, timeout).await
+            }
+        });
+
+        // Give the IO task a moment to receive and start processing.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Simulate Drop: cancel + abort.
+        cancel.cancel();
+        abort_handle.abort();
+
+        // The command task should complete (not hang forever).
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            cmd_task,
+        )
+        .await;
+        assert!(result.is_ok(), "command task should complete after cancel+abort");
+        let inner = result.unwrap().unwrap();
+        assert!(inner.is_err(), "command should fail after IO task cancelled");
     }
 }

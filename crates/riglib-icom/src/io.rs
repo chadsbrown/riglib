@@ -60,6 +60,7 @@ pub(crate) enum Request {
         reply: oneshot::Sender<Result<()>>,
     },
     /// Graceful shutdown; returns the transport for test recovery.
+    #[allow(dead_code)]
     Shutdown {
         reply: oneshot::Sender<Box<dyn Transport>>,
     },
@@ -133,6 +134,7 @@ impl RigIo {
     }
 
     /// Shut down the IO task and recover the transport.
+    #[allow(dead_code)]
     pub async fn shutdown(self) -> Result<Box<dyn Transport>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self

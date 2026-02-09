@@ -363,7 +363,9 @@ As long as direct mode exists, you have two different correctness surfaces (dire
 
 ---
 
-## Sub-Phase A.6 — Lifecycle Hygiene (CancellationToken + Drop)
+## Sub-Phase A.6 — Lifecycle Hygiene (CancellationToken + Drop) ✅
+
+**Status: COMPLETE** — Added `Drop` impl for `IcomRig` that cancels the CancellationToken (graceful) and aborts the JoinHandle (safety net). Added `#[allow(dead_code)]` on test-only `Shutdown` variant and `shutdown()` method. Added 2 tests: `drop_does_not_hang` and `drop_during_pending_command`. Cleaned up unused `IC7300_ADDR` constant. All 1,878 workspace tests pass, clippy clean (zero warnings).
 
 **Scope:** Clean shutdown. Single session. Depends on A.5 (or can parallel with A.5).
 
