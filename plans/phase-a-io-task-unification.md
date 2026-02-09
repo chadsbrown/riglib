@@ -145,7 +145,9 @@ impl RigIo {
 
 ---
 
-## Sub-Phase A.3 — IO Task Loop Implementation
+## Sub-Phase A.3 — IO Task Loop Implementation ✅
+
+**Status: COMPLETE** — Added `spawn_io_task`, `io_loop`, `execute_civ_command`, `execute_civ_ack_command`, `process_idle_frames`, `drain_idle_frames` to `io.rs`. Made `is_transceive_frame`, `process_single_transceive_frame`, `process_transceive_frames` `pub(crate)` in `transceive.rs` for reuse. 12 new white-box tests pass (basic command, echo skip, ACK, NAK, collision with/without recovery, SetLine DTR/RTS, shutdown, interleaved transceive, drain_idle_frames). All 1,876 workspace tests pass, clippy clean.
 
 **Scope:** The core IO loop. This is the most complex sub-phase. One full session. Depends on A.2.
 

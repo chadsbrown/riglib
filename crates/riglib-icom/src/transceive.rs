@@ -368,7 +368,7 @@ async fn execute_command_on_transport(
 // ---------------------------------------------------------------------------
 
 /// Returns true if the frame looks like a transceive broadcast from the rig.
-fn is_transceive_frame(frame: &CivFrame, civ_address: u8) -> bool {
+pub(crate) fn is_transceive_frame(frame: &CivFrame, civ_address: u8) -> bool {
     // Transceive frames are sent from the rig to either the broadcast
     // address (0x00) or to the controller address.
     frame.src_addr == civ_address
@@ -380,7 +380,7 @@ fn is_transceive_frame(frame: &CivFrame, civ_address: u8) -> bool {
 
 /// Process all complete transceive frames in a buffer, emitting events
 /// for each. Incomplete data is left in the buffer for next time.
-fn process_transceive_frames(
+pub(crate) fn process_transceive_frames(
     buf: &mut Vec<u8>,
     civ_address: u8,
     event_tx: &broadcast::Sender<RigEvent>,
@@ -410,7 +410,7 @@ fn process_transceive_frames(
 }
 
 /// Process a single transceive frame and emit the appropriate event.
-fn process_single_transceive_frame(
+pub(crate) fn process_single_transceive_frame(
     frame: &CivFrame,
     _civ_address: u8,
     event_tx: &broadcast::Sender<RigEvent>,
