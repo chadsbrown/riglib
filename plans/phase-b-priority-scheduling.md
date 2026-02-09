@@ -97,9 +97,10 @@ Priority scheduling does not change shutdown requirements. The IO task lifecycle
 
 ---
 
-## Sub-Phase B.3 — Bounded Buffer + Resync
+## Sub-Phase B.3 — Bounded Buffer + Resync  **[COMPLETE]**
 
 **Scope:** Safety limits. Single session. Depends on B.1.
+**Status:** Complete — unified `MAX_BUF` (4096) guards both the idle buffer and the per-command response buffer in `execute_civ_command`. Overflow triggers warning, clear, and retry. Overflow resync test passes, 1,883 workspace tests pass, zero warnings.
 
 ### Implementation
 

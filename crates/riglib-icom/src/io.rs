@@ -224,8 +224,11 @@ pub(crate) fn spawn_io_task(
 // IO Loop (A.3)
 // ---------------------------------------------------------------------------
 
-/// Maximum idle buffer size before reset to prevent unbounded growth.
-const MAX_IDLE_BUF: usize = 4096;
+/// Maximum buffer size before reset to prevent unbounded growth.
+/// Applies to both the idle buffer and the per-command response buffer.
+/// A normal CI-V frame is 6–15 bytes; 4096 is generous headroom for
+/// echo + interleaved transceive + response even on a noisy bus.
+const MAX_BUF: usize = 4096;
 
 /// The main IO loop. Runs as a spawned Tokio task.
 ///
@@ -289,7 +292,7 @@ async fn io_loop(
                 match transport.receive(&mut buf, Duration::from_millis(100)).await {
                     Ok(n) if n > 0 => {
                         idle_buf.extend_from_slice(&buf[..n]);
-                        if idle_buf.len() > MAX_IDLE_BUF {
+                        if idle_buf.len() > MAX_BUF {
                             tracing::warn!(
                                 len = idle_buf.len(),
                                 "idle buffer overflow, resetting"
@@ -398,6 +401,17 @@ async fn execute_civ_command(
             match transport.receive(&mut buf, config.command_timeout).await {
                 Ok(n) => {
                     response_buf.extend_from_slice(&buf[..n]);
+
+                    // Bounded buffer: prevent unbounded growth from
+                    // malformed input or noise on the CI-V bus.
+                    if response_buf.len() > MAX_BUF {
+                        tracing::warn!(
+                            len = response_buf.len(),
+                            "response buffer overflow, clearing and retrying"
+                        );
+                        response_buf.clear();
+                        break;
+                    }
 
                     loop {
                         match civ::decode_frame(&response_buf) {
@@ -1103,6 +1117,49 @@ mod tests {
 
         cancel.cancel();
         let _ = task.await;
+    }
+
+    // =======================================================================
+    // B.3 — Bounded buffer + resync tests
+    // =======================================================================
+
+    #[tokio::test]
+    async fn io_task_response_buffer_overflow_resyncs() {
+        // Feed >4096 bytes of garbage on the first attempt. With auto_retry,
+        // the overflow triggers a buffer clear and retry. The second attempt
+        // gets a valid response.
+        let mut mock = MockTransport::new();
+
+        let cmd = encode_frame(IC7610_ADDR, CONTROLLER_ADDR, 0x03, None, &[]);
+        let response = encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x03,
+            Some(0x00),
+            &[0x00, 0x60, 0x14, 0x00],
+        );
+
+        // First attempt: 5000 bytes of non-CI-V garbage (no 0xFD terminator).
+        let garbage = vec![0xAA; 5000];
+        mock.expect(&cmd, &garbage);
+
+        // Second attempt (retry): valid response.
+        mock.expect(&cmd, &response);
+
+        let (event_tx, _) = broadcast::channel(16);
+        let config = IoConfig {
+            auto_retry: true,
+            max_retries: 1,
+            ..test_config()
+        };
+        let io = spawn_io_task(Box::new(mock), config, event_tx);
+
+        let result = io.command(cmd, Duration::from_millis(500)).await;
+        assert!(result.is_ok(), "expected success after resync, got {result:?}");
+        let frame = result.unwrap();
+        assert_eq!(frame.cmd, 0x03);
+
+        let _ = io.shutdown().await;
     }
 
     // =======================================================================
