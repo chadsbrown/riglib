@@ -60,16 +60,13 @@ Alternative: `riglib-core/src/text_io.rs` — simpler dependency graph but muddi
 
 ---
 
-## Sub-Phase D.1 — Extract Generic Text-Protocol IO Task Module
+## Sub-Phase D.1a — Text-Protocol IO Task Core
 
-**Scope:** Shared infrastructure. Two sessions (one for IO task + RT/BG, one for tests and validation).
+**Scope:** IO task loop, types, and command execution. One session.
 
-Create the text-protocol IO task module containing:
+Create the text-protocol IO task module with the core command/response engine:
 
-- **RT/BG two-channel dispatch** — carry forward the Phase B pattern from Icom. PTT/CW commands route through RT, polling and standard operations through BG. The `biased select!` priority ordering is identical.
-- **Bounded buffer** — `MAX_BUF` (8192 for text protocols, per Phase B.3) guards both idle and response buffers.
-- **Frame terminator** — `;` for all text protocols.
-- **Configurable protocol hooks** via a `TextProtocolConfig` struct:
+- **`TextProtocolConfig` struct** — parameterizes the IO task for manufacturer differences:
 
 ```rust
 pub struct TextProtocolConfig {
@@ -82,8 +79,12 @@ pub struct TextProtocolConfig {
 }
 ```
 
-- **Request enum** — `CatCommand`, `SetLine`, `Shutdown` (no `CivAckCommand` equivalent needed; text SET commands are silent, so ACK semantics are handled by drain/timeout)
+- **Request enum** — `CatCommand`, `SetCommand`, `SetLine`, `Shutdown` (no `CivAckCommand` equivalent needed; text SET commands are silent, so ACK semantics are handled by drain/timeout)
 - **`RigIo` handle struct** — same shape as Icom: `rt_tx`, `bg_tx`, `cancel`, `task`
+- **RT/BG two-channel dispatch** — carry forward the Phase B pattern from Icom. The `biased select!` priority ordering is identical: cancel > RT > BG > idle.
+- **`io_loop`** — command execution (send command, read until `;` terminator, correlate response by prefix), `?;` error detection, NoVerify drain logic, idle frame processing for unsolicited AI responses.
+- **Bounded buffer** — `MAX_BUF` (8192 for text protocols, per Phase B.3) guards both idle and response buffers. Overflow → warn → clear → retry.
+- **`CancellationToken` lifecycle** — drop rig → cancel token → IO task exits.
 
 ### What Does NOT Translate from Icom
 
@@ -101,10 +102,32 @@ pub struct TextProtocolConfig {
 
 ### Definition of Done
 
-- Generic text IO task compiles and passes unit tests with MockTransport.
-- Parameterized for manufacturer-specific prefix parsing via `TextProtocolConfig`.
-- RT/BG priority channels functional (PTT through RT completes before queued BG polls).
+- IO task compiles and handles basic command/response exchanges with MockTransport.
+- `RigIo` methods (`command`, `set_command`, `rt_*`, `set_line`) work through both channels.
+- `TextProtocolConfig` accepted and wired through.
+
+---
+
+## Sub-Phase D.1b — Text-Protocol IO Task Tests and Edge Cases
+
+**Scope:** Test suite and edge-case validation. One session. Depends on D.1a.
+
+Build comprehensive tests for the generic text IO task:
+
+- **RT priority ordering** — pre-fill BG with polling commands, inject RT PTT, verify RT completes first (same pattern as Icom `io_task_rt_priority_over_bg`).
+- **Buffer overflow resync** — feed oversized garbage, verify warning + clear + successful retry.
+- **Mixed AI and command responses** — send GET command, mock injects unsolicited AI frame before the response, verify AI frame becomes event and response returns to caller.
+- **`?;` error in Verify and NoVerify modes** — verify error detected and returned in both paths.
+- **NoVerify drain timeout** — verify timeout-as-success semantics (no `?;` within drain window = success).
+- **Shutdown lifecycle** — verify cancel token stops the IO task cleanly.
+- **SetLine (DTR/RTS)** — verify RT path for hardware PTT/CW keying.
+
+### Definition of Done
+
+- All edge-case tests pass with MockTransport.
+- RT/BG priority channels verified under simulated polling load.
 - Buffer overflow produces warning and clean resync, not OOM.
+- Ready for per-manufacturer wiring in D.2-D.4.
 
 ---
 

@@ -19,7 +19,7 @@
 | [A](phase-a-io-task-unification.md) | Universal IO task, remove direct path | Icom | A.1-A.6 | ~6 | — |
 | [B](phase-b-priority-scheduling.md) | RT/BG priority scheduling | Icom | B.1-B.3 | ~3 | A |
 | [C](phase-c-read-coalescing.md) | In-flight read coalescing (if needed) | Icom | C.1-C.2 | ~2 | B |
-| [D](phase-d-text-protocol-migration.md) | Apply IO-task pattern to text-protocol rigs | Yaesu, Kenwood, Elecraft | D.1-D.4 | ~5-6 | A, B |
+| [D](phase-d-text-protocol-migration.md) | Apply IO-task pattern to text-protocol rigs | Yaesu, Kenwood, Elecraft | D.1a-D.4 | ~5-6 | A, B |
 | [E](phase-e-flex-alignment.md) | Align Flex with new conventions | Flex | E.1-E.3 | ~3 | A |
 | [F](phase-f-so2r-transactions.md) | Atomic command sequences for SO2R | All | F.1-F.3 | ~3-4 | B, hardware validation |
 
@@ -60,10 +60,13 @@ A.3 (IO task loop)                     Err.1 (Define error types)
        +--- After B.3: D carries forward RT/BG pattern ---+
        |                                                   |
        v                                                   v
-  D.1 (Generic text IO + RT/BG)                   C.1 (Coalesce key)
+  D.1a (Text IO task core)                         C.1 (Coalesce key)
        |                                             [ONLY if profiling
        v                                              shows need]
-  D.2 (Kenwood)                                    C.2 (Fan-out)
+  D.1b (Text IO tests + edge cases)                C.2 (Fan-out)
+       |
+       v
+  D.2 (Kenwood)
        |
        v
   D.3 (Elecraft)
