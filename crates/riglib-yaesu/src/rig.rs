@@ -924,10 +924,10 @@ impl Rig for YaesuRig {
     }
 
     async fn get_rit(&self) -> Result<(bool, i32)> {
-        let cmd = commands::cmd_read_rit();
-        debug!("reading RIT state");
+        let cmd = commands::cmd_read_information();
+        debug!("reading RIT state via IF command");
         let (_prefix, data) = self.execute_command(&cmd).await?;
-        let (enabled, offset_hz) = commands::parse_rit_response(&data)?;
+        let (enabled, offset_hz) = commands::parse_rit_from_info(&data)?;
         let _ = self
             .event_tx
             .send(RigEvent::RitChanged { enabled, offset_hz });
@@ -961,10 +961,10 @@ impl Rig for YaesuRig {
     }
 
     async fn get_xit(&self) -> Result<(bool, i32)> {
-        let cmd = commands::cmd_read_xit();
-        debug!("reading XIT state");
+        let cmd = commands::cmd_read_information();
+        debug!("reading XIT state via IF command");
         let (_prefix, data) = self.execute_command(&cmd).await?;
-        let (enabled, offset_hz) = commands::parse_xit_response(&data)?;
+        let (enabled, offset_hz) = commands::parse_xit_from_info(&data)?;
         let _ = self
             .event_tx
             .send(RigEvent::XitChanged { enabled, offset_hz });
@@ -2052,8 +2052,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_rit() {
         let mut mock = MockTransport::new();
-        let read_cmd = commands::cmd_read_rit();
-        mock.expect(&read_cmd, b"RT01+0050;");
+        let if_cmd = commands::cmd_read_information();
+        // IF response: mem=001, freq=014250000, sign=+, offset=0050, rit=1, xit=0, mode=2, ...
+        mock.expect(&if_cmd, b"IF001014250000+00501020001;");
 
         let rig = make_test_rig(mock);
         let (enabled, offset) = rig.get_rit().await.unwrap();
@@ -2064,8 +2065,8 @@ mod tests {
     #[tokio::test]
     async fn test_get_rit_negative() {
         let mut mock = MockTransport::new();
-        let read_cmd = commands::cmd_read_rit();
-        mock.expect(&read_cmd, b"RT01-0100;");
+        let if_cmd = commands::cmd_read_information();
+        mock.expect(&if_cmd, b"IF001014250000-01001020001;");
 
         let rig = make_test_rig(mock);
         let (enabled, offset) = rig.get_rit().await.unwrap();
@@ -2076,8 +2077,8 @@ mod tests {
     #[tokio::test]
     async fn test_get_rit_off() {
         let mut mock = MockTransport::new();
-        let read_cmd = commands::cmd_read_rit();
-        mock.expect(&read_cmd, b"RT00+0000;");
+        let if_cmd = commands::cmd_read_information();
+        mock.expect(&if_cmd, b"IF001014250000+00000020001;");
 
         let rig = make_test_rig(mock);
         let (enabled, offset) = rig.get_rit().await.unwrap();
@@ -2088,15 +2089,15 @@ mod tests {
     #[tokio::test]
     async fn test_set_rit() {
         let mut mock = MockTransport::new();
-        // 1. Enable RIT
+        // All set commands are fire-and-forget (no response from radio).
+        // Empty response causes mock to return Timeout, which is success
+        // for SET commands in NoVerify mode.
         let rit_on_cmd = commands::cmd_set_rit_on(true);
-        mock.expect(&rit_on_cmd, b"RT01;");
-        // 2. Clear offset
+        mock.expect(&rit_on_cmd, b"");
         let clear_cmd = commands::cmd_rit_clear();
-        mock.expect(&clear_cmd, b"RC;");
-        // 3. Set offset up
+        mock.expect(&clear_cmd, b"");
         let up_cmd = commands::cmd_rit_up(50);
-        mock.expect(&up_cmd, b"RU0050;");
+        mock.expect(&up_cmd, b"");
 
         let rig = make_test_rig(mock);
         rig.set_rit(true, 50).await.unwrap();
@@ -2106,11 +2107,11 @@ mod tests {
     async fn test_set_rit_negative() {
         let mut mock = MockTransport::new();
         let rit_on_cmd = commands::cmd_set_rit_on(true);
-        mock.expect(&rit_on_cmd, b"RT01;");
+        mock.expect(&rit_on_cmd, b"");
         let clear_cmd = commands::cmd_rit_clear();
-        mock.expect(&clear_cmd, b"RC;");
+        mock.expect(&clear_cmd, b"");
         let down_cmd = commands::cmd_rit_down(100);
-        mock.expect(&down_cmd, b"RD0100;");
+        mock.expect(&down_cmd, b"");
 
         let rig = make_test_rig(mock);
         rig.set_rit(true, -100).await.unwrap();
@@ -2119,11 +2120,10 @@ mod tests {
     #[tokio::test]
     async fn test_set_rit_zero_offset() {
         let mut mock = MockTransport::new();
-        // Enable RIT with zero offset -- no RU/RD needed
         let rit_on_cmd = commands::cmd_set_rit_on(true);
-        mock.expect(&rit_on_cmd, b"RT01;");
+        mock.expect(&rit_on_cmd, b"");
         let clear_cmd = commands::cmd_rit_clear();
-        mock.expect(&clear_cmd, b"RC;");
+        mock.expect(&clear_cmd, b"");
 
         let rig = make_test_rig(mock);
         rig.set_rit(true, 0).await.unwrap();
@@ -2132,8 +2132,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_xit() {
         let mut mock = MockTransport::new();
-        let read_cmd = commands::cmd_read_xit();
-        mock.expect(&read_cmd, b"XT01+0075;");
+        let if_cmd = commands::cmd_read_information();
+        // XIT on at offset +75: rit=0, xit=1
+        mock.expect(&if_cmd, b"IF001014250000+00750120001;");
 
         let rig = make_test_rig(mock);
         let (enabled, offset) = rig.get_xit().await.unwrap();
@@ -2145,11 +2146,11 @@ mod tests {
     async fn test_set_xit() {
         let mut mock = MockTransport::new();
         let xit_on_cmd = commands::cmd_set_xit_on(true);
-        mock.expect(&xit_on_cmd, b"XT01;");
+        mock.expect(&xit_on_cmd, b"");
         let clear_cmd = commands::cmd_rit_clear();
-        mock.expect(&clear_cmd, b"RC;");
+        mock.expect(&clear_cmd, b"");
         let up_cmd = commands::cmd_rit_up(75);
-        mock.expect(&up_cmd, b"RU0075;");
+        mock.expect(&up_cmd, b"");
 
         let rig = make_test_rig(mock);
         rig.set_xit(true, 75).await.unwrap();
@@ -2158,8 +2159,8 @@ mod tests {
     #[tokio::test]
     async fn test_rit_emits_event() {
         let mut mock = MockTransport::new();
-        let read_cmd = commands::cmd_read_rit();
-        mock.expect(&read_cmd, b"RT01+0050;");
+        let if_cmd = commands::cmd_read_information();
+        mock.expect(&if_cmd, b"IF001014250000+00501020001;");
 
         let rig = make_test_rig(mock);
         let mut event_rx = rig.subscribe().unwrap();

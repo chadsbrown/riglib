@@ -174,8 +174,12 @@ pub fn decode_response(buf: &[u8]) -> DecodeResult {
 
     // Known command prefixes that include a trailing digit as part of the
     // command name.
+    // Note: RT and XT are NOT in this list because `RT0;`/`RT1;` and
+    // `XT0;`/`XT1;` are set-only commands where the digit is the value
+    // parameter, not a sub-function selector. RIT/XIT state is read via
+    // the `IF;` command instead.
     const DIGIT_SUFFIX_PREFIXES: &[&str] =
-        &["MD", "RM", "SM", "SH", "NA", "AN", "PA", "RA", "RT", "XT"];
+        &["MD", "RM", "SM", "SH", "NA", "AN", "PA", "RA"];
 
     let prefix_end = if DIGIT_SUFFIX_PREFIXES.contains(&alpha_prefix)
         && alpha_end < body_str.len()

@@ -298,53 +298,51 @@ pub fn cmd_set_split(on: bool) -> Vec<u8> {
 // RIT / XIT command builders
 // ---------------------------------------------------------------
 
-/// Build a "read RIT state" command (`RT0;`).
+/// Build an "information" command (`IF;`).
 ///
-/// The response returns the RIT on/off state and offset in hertz.
-pub fn cmd_read_rit() -> Vec<u8> {
-    encode_command("RT0", "")
+/// The IF command returns a multi-field response containing the current
+/// VFO-A state: frequency, clarifier offset, RIT/XIT on/off, mode, etc.
+/// This is the correct way to read RIT/XIT state on Yaesu newcat radios,
+/// since the `RT` and `XT` commands are set-only (no read/answer).
+pub fn cmd_read_information() -> Vec<u8> {
+    encode_command("IF", "")
 }
 
 /// Build a "set RIT on/off" command.
 ///
-/// - `RT01;` enables RIT.
-/// - `RT00;` disables RIT.
+/// - `RT1;` enables RIT.
+/// - `RT0;` disables RIT.
 ///
-/// This does not change the offset value, only the on/off state.
+/// This is a fire-and-forget command with no response from the rig.
+/// It does not change the offset value, only the on/off state.
 ///
 /// # Arguments
 ///
 /// * `on` - `true` to enable RIT, `false` to disable.
 pub fn cmd_set_rit_on(on: bool) -> Vec<u8> {
     if on {
-        encode_command("RT0", "1")
+        encode_command("RT", "1")
     } else {
-        encode_command("RT0", "0")
+        encode_command("RT", "0")
     }
-}
-
-/// Build a "read XIT state" command (`XT0;`).
-///
-/// The response returns the XIT on/off state and offset in hertz.
-pub fn cmd_read_xit() -> Vec<u8> {
-    encode_command("XT0", "")
 }
 
 /// Build a "set XIT on/off" command.
 ///
-/// - `XT01;` enables XIT.
-/// - `XT00;` disables XIT.
+/// - `XT1;` enables XIT.
+/// - `XT0;` disables XIT.
 ///
-/// This does not change the offset value, only the on/off state.
+/// This is a fire-and-forget command with no response from the rig.
+/// It does not change the offset value, only the on/off state.
 ///
 /// # Arguments
 ///
 /// * `on` - `true` to enable XIT, `false` to disable.
 pub fn cmd_set_xit_on(on: bool) -> Vec<u8> {
     if on {
-        encode_command("XT0", "1")
+        encode_command("XT", "1")
     } else {
-        encode_command("XT0", "0")
+        encode_command("XT", "0")
     }
 }
 
@@ -675,78 +673,89 @@ pub fn parse_split_response(data: &str) -> Result<bool> {
     }
 }
 
-/// Parse a RIT response from the data portion of an `RT0` response.
+/// Parse RIT state from the data portion of an `IF` (Information) response.
 ///
-/// After prefix splitting by the protocol decoder, the data portion has the
-/// format `P+XXXX` or `P-XXXX` where:
-/// - `P` is `0` (RIT off) or `1` (RIT on)
-/// - `+` or `-` is the sign of the offset
-/// - `XXXX` is a 4-digit absolute offset in hertz
+/// The IF response data (after the `IF` prefix is stripped by the protocol
+/// decoder) has the following field layout for 9-digit-frequency Yaesu radios
+/// (FT-DX10, FT-891, FT-991A, FT-DX101D, FT-DX101MP, FT-710):
 ///
-/// # Returns
-///
-/// A tuple of `(on, offset_hz)` where `on` is the RIT enabled state and
-/// `offset_hz` is the signed offset in hertz.
-///
-/// # Errors
-///
-/// Returns [`Error::Protocol`] if the data does not match the expected format.
-pub fn parse_rit_response(data: &str) -> Result<(bool, i32)> {
-    parse_rit_xit_response(data, "RIT")
-}
-
-/// Parse a XIT response from the data portion of an `XT0` response.
-///
-/// Same format as RIT: `P+XXXX` or `P-XXXX` where P is 0/1, sign is +/-,
-/// and XXXX is a 4-digit absolute offset in hertz.
+/// | Offset | Length | Field                        |
+/// |--------|--------|------------------------------|
+/// | 0      | 3      | Memory channel number        |
+/// | 3      | 9      | VFO-A frequency (Hz)         |
+/// | 12     | 1      | Clarifier direction (+/-)    |
+/// | 13     | 4      | Clarifier offset (0000-9999) |
+/// | 17     | 1      | RX clarifier (RIT) on/off    |
+/// | 18     | 1      | TX clarifier (XIT) on/off    |
+/// | 19     | 1      | Mode                         |
+/// | ...    | ...    | Additional fields             |
 ///
 /// # Returns
 ///
-/// A tuple of `(on, offset_hz)` where `on` is the XIT enabled state and
-/// `offset_hz` is the signed offset in hertz.
+/// A tuple of `(rit_on, offset_hz)` where `rit_on` is the RIT enabled state
+/// and `offset_hz` is the signed clarifier offset in hertz.
 ///
 /// # Errors
 ///
-/// Returns [`Error::Protocol`] if the data does not match the expected format.
-pub fn parse_xit_response(data: &str) -> Result<(bool, i32)> {
-    parse_rit_xit_response(data, "XIT")
+/// Returns [`Error::Protocol`] if the data is too short or has invalid fields.
+pub fn parse_rit_from_info(data: &str) -> Result<(bool, i32)> {
+    parse_clarifier_from_info(data, 17, "RIT")
 }
 
-/// Internal helper to parse the data portion of an RT0 or XT0 response.
+/// Parse XIT state from the data portion of an `IF` (Information) response.
 ///
-/// Expected format: `P+XXXX` or `P-XXXX` (6 characters total).
-fn parse_rit_xit_response(data: &str, label: &str) -> Result<(bool, i32)> {
-    if data.len() != 6 {
+/// Same field layout as [`parse_rit_from_info`], but reads the XIT flag at
+/// offset 18 instead of the RIT flag at offset 17.
+///
+/// # Returns
+///
+/// A tuple of `(xit_on, offset_hz)` where `xit_on` is the XIT enabled state
+/// and `offset_hz` is the signed clarifier offset in hertz.
+///
+/// # Errors
+///
+/// Returns [`Error::Protocol`] if the data is too short or has invalid fields.
+pub fn parse_xit_from_info(data: &str) -> Result<(bool, i32)> {
+    parse_clarifier_from_info(data, 18, "XIT")
+}
+
+/// Internal helper to parse RIT or XIT state from an IF response.
+///
+/// The clarifier offset (shared between RIT and XIT) is at data[12..17]
+/// (sign + 4 digits). The on/off flag is at `flag_offset`.
+fn parse_clarifier_from_info(data: &str, flag_offset: usize, label: &str) -> Result<(bool, i32)> {
+    // Need at least 19 chars: 3 (mem) + 9 (freq) + 1 (sign) + 4 (offset) + 1 (RIT) + 1 (XIT)
+    if data.len() < 19 {
         return Err(Error::Protocol(format!(
-            "expected 6 characters for {label} response, got {} characters: {data:?}",
+            "IF response too short for {label} parsing: expected at least 19 chars, got {}",
             data.len()
         )));
     }
 
-    let on = match &data[0..1] {
-        "0" => false,
-        "1" => true,
-        other => {
-            return Err(Error::Protocol(format!(
-                "expected 0 or 1 for {label} on/off state, got {other:?}"
-            )));
-        }
-    };
-
-    let sign = match &data[1..2] {
+    let sign = match &data[12..13] {
         "+" => 1i32,
         "-" => -1i32,
         other => {
             return Err(Error::Protocol(format!(
-                "expected + or - for {label} offset sign, got {other:?}"
+                "expected + or - for clarifier sign, got {other:?}"
             )));
         }
     };
 
-    let digits = &data[2..6];
-    let abs_offset: i32 = digits
-        .parse()
-        .map_err(|e| Error::Protocol(format!("invalid {label} offset digits: {digits:?} ({e})")))?;
+    let digits = &data[13..17];
+    let abs_offset: i32 = digits.parse().map_err(|e| {
+        Error::Protocol(format!("invalid clarifier offset digits: {digits:?} ({e})"))
+    })?;
+
+    let on = match &data[flag_offset..flag_offset + 1] {
+        "0" => false,
+        "1" => true,
+        other => {
+            return Err(Error::Protocol(format!(
+                "expected 0 or 1 for {label} state, got {other:?}"
+            )));
+        }
+    };
 
     Ok((on, sign * abs_offset))
 }
@@ -1559,33 +1568,28 @@ mod tests {
     // ---------------------------------------------------------------
 
     #[test]
-    fn cmd_read_rit_bytes() {
-        assert_eq!(cmd_read_rit(), b"RT0;");
+    fn cmd_read_information_bytes() {
+        assert_eq!(cmd_read_information(), b"IF;");
     }
 
     #[test]
     fn cmd_set_rit_on_bytes() {
-        assert_eq!(cmd_set_rit_on(true), b"RT01;");
+        assert_eq!(cmd_set_rit_on(true), b"RT1;");
     }
 
     #[test]
     fn cmd_set_rit_off_bytes() {
-        assert_eq!(cmd_set_rit_on(false), b"RT00;");
-    }
-
-    #[test]
-    fn cmd_read_xit_bytes() {
-        assert_eq!(cmd_read_xit(), b"XT0;");
+        assert_eq!(cmd_set_rit_on(false), b"RT0;");
     }
 
     #[test]
     fn cmd_set_xit_on_bytes() {
-        assert_eq!(cmd_set_xit_on(true), b"XT01;");
+        assert_eq!(cmd_set_xit_on(true), b"XT1;");
     }
 
     #[test]
     fn cmd_set_xit_off_bytes() {
-        assert_eq!(cmd_set_xit_on(false), b"XT00;");
+        assert_eq!(cmd_set_xit_on(false), b"XT0;");
     }
 
     #[test]
@@ -1634,152 +1638,154 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Response parsing — RIT
+    // Response parsing — RIT (from IF response)
     // ---------------------------------------------------------------
+
+    // Helper: build a minimal IF data string (after prefix stripped).
+    // Format: [mem:3][freq:9][sign:1][offset:4][rit:1][xit:1][mode:1]...
+    fn make_if_data(sign: &str, offset: &str, rit: &str, xit: &str) -> String {
+        format!("001014250000{sign}{offset}{rit}{xit}20001")
+    }
 
     #[test]
     fn parse_rit_on_positive_offset() {
-        let (on, offset) = parse_rit_response("1+0050").unwrap();
+        let data = make_if_data("+", "0050", "1", "0");
+        let (on, offset) = parse_rit_from_info(&data).unwrap();
         assert!(on);
         assert_eq!(offset, 50);
     }
 
     #[test]
     fn parse_rit_on_negative_offset() {
-        let (on, offset) = parse_rit_response("1-0050").unwrap();
+        let data = make_if_data("-", "0050", "1", "0");
+        let (on, offset) = parse_rit_from_info(&data).unwrap();
         assert!(on);
         assert_eq!(offset, -50);
     }
 
     #[test]
     fn parse_rit_off_zero_offset() {
-        let (on, offset) = parse_rit_response("0+0000").unwrap();
+        let data = make_if_data("+", "0000", "0", "0");
+        let (on, offset) = parse_rit_from_info(&data).unwrap();
         assert!(!on);
         assert_eq!(offset, 0);
     }
 
     #[test]
     fn parse_rit_off_negative_zero() {
-        // -0000 should parse as 0
-        let (on, offset) = parse_rit_response("0-0000").unwrap();
+        let data = make_if_data("-", "0000", "0", "0");
+        let (on, offset) = parse_rit_from_info(&data).unwrap();
         assert!(!on);
         assert_eq!(offset, 0);
     }
 
     #[test]
     fn parse_rit_max_positive_offset() {
-        let (on, offset) = parse_rit_response("1+9999").unwrap();
+        let data = make_if_data("+", "9999", "1", "0");
+        let (on, offset) = parse_rit_from_info(&data).unwrap();
         assert!(on);
         assert_eq!(offset, 9999);
     }
 
     #[test]
     fn parse_rit_max_negative_offset() {
-        let (on, offset) = parse_rit_response("1-9999").unwrap();
+        let data = make_if_data("-", "9999", "1", "0");
+        let (on, offset) = parse_rit_from_info(&data).unwrap();
         assert!(on);
         assert_eq!(offset, -9999);
     }
 
     #[test]
     fn parse_rit_off_with_residual_offset() {
-        // RIT disabled but offset register still has a value
-        let (on, offset) = parse_rit_response("0+0120").unwrap();
+        let data = make_if_data("+", "0120", "0", "0");
+        let (on, offset) = parse_rit_from_info(&data).unwrap();
         assert!(!on);
         assert_eq!(offset, 120);
     }
 
     #[test]
-    fn parse_rit_wrong_length_short() {
-        assert!(parse_rit_response("1+050").is_err());
+    fn parse_rit_info_too_short() {
+        assert!(parse_rit_from_info("001014250000+0050").is_err());
     }
 
     #[test]
-    fn parse_rit_wrong_length_long() {
-        assert!(parse_rit_response("1+00500").is_err());
+    fn parse_rit_info_empty() {
+        assert!(parse_rit_from_info("").is_err());
     }
 
     #[test]
-    fn parse_rit_empty() {
-        assert!(parse_rit_response("").is_err());
+    fn parse_rit_info_invalid_sign() {
+        let data = "001014250000*005010200010";
+        assert!(parse_rit_from_info(data).is_err());
     }
 
     #[test]
-    fn parse_rit_invalid_on_off() {
-        assert!(parse_rit_response("2+0050").is_err());
+    fn parse_rit_info_invalid_digits() {
+        let data = "001014250000+00AB10200010";
+        assert!(parse_rit_from_info(data).is_err());
     }
 
     #[test]
-    fn parse_rit_invalid_sign() {
-        assert!(parse_rit_response("1*0050").is_err());
-    }
-
-    #[test]
-    fn parse_rit_invalid_digits() {
-        assert!(parse_rit_response("1+00AB").is_err());
+    fn parse_rit_info_invalid_flag() {
+        let data = "001014250000+005020200010";
+        assert!(parse_rit_from_info(data).is_err());
     }
 
     // ---------------------------------------------------------------
-    // Response parsing — XIT
+    // Response parsing — XIT (from IF response)
     // ---------------------------------------------------------------
 
     #[test]
     fn parse_xit_on_positive_offset() {
-        let (on, offset) = parse_xit_response("1+0050").unwrap();
+        let data = make_if_data("+", "0050", "0", "1");
+        let (on, offset) = parse_xit_from_info(&data).unwrap();
         assert!(on);
         assert_eq!(offset, 50);
     }
 
     #[test]
     fn parse_xit_on_negative_offset() {
-        let (on, offset) = parse_xit_response("1-0050").unwrap();
+        let data = make_if_data("-", "0050", "0", "1");
+        let (on, offset) = parse_xit_from_info(&data).unwrap();
         assert!(on);
         assert_eq!(offset, -50);
     }
 
     #[test]
     fn parse_xit_off_zero_offset() {
-        let (on, offset) = parse_xit_response("0+0000").unwrap();
+        let data = make_if_data("+", "0000", "0", "0");
+        let (on, offset) = parse_xit_from_info(&data).unwrap();
         assert!(!on);
         assert_eq!(offset, 0);
     }
 
     #[test]
     fn parse_xit_max_positive_offset() {
-        let (on, offset) = parse_xit_response("1+9999").unwrap();
+        let data = make_if_data("+", "9999", "0", "1");
+        let (on, offset) = parse_xit_from_info(&data).unwrap();
         assert!(on);
         assert_eq!(offset, 9999);
     }
 
     #[test]
     fn parse_xit_max_negative_offset() {
-        let (on, offset) = parse_xit_response("1-9999").unwrap();
+        let data = make_if_data("-", "9999", "0", "1");
+        let (on, offset) = parse_xit_from_info(&data).unwrap();
         assert!(on);
         assert_eq!(offset, -9999);
     }
 
     #[test]
-    fn parse_xit_wrong_length() {
-        assert!(parse_xit_response("1+050").is_err());
+    fn parse_xit_info_too_short() {
+        // Only 18 chars — XIT flag at position 18 is missing
+        assert!(parse_xit_from_info("001014250000+00501").is_err());
     }
 
     #[test]
-    fn parse_xit_empty() {
-        assert!(parse_xit_response("").is_err());
-    }
-
-    #[test]
-    fn parse_xit_invalid_on_off() {
-        assert!(parse_xit_response("3+0050").is_err());
-    }
-
-    #[test]
-    fn parse_xit_invalid_sign() {
-        assert!(parse_xit_response("1=0050").is_err());
-    }
-
-    #[test]
-    fn parse_xit_invalid_digits() {
-        assert!(parse_xit_response("1+ABCD").is_err());
+    fn parse_xit_info_invalid_flag() {
+        // XIT flag at position 18 is '2', which is invalid (must be 0 or 1)
+        let data = "001014250000+005002200010";
+        assert!(parse_xit_from_info(data).is_err());
     }
 
     // ---------------------------------------------------------------

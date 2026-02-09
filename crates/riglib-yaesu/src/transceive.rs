@@ -203,24 +203,25 @@ fn process_ai_response(prefix: &str, data: &str, event_tx: &broadcast::Sender<Ri
                 debug!(?e, "failed to parse AI PTT response");
             }
         },
-        "RT0" => match commands::parse_rit_response(data) {
-            Ok((enabled, offset_hz)) => {
-                debug!(enabled, offset_hz, "AI RIT update");
-                let _ = event_tx.send(RigEvent::RitChanged { enabled, offset_hz });
-            }
-            Err(e) => {
-                debug!(?e, "failed to parse AI RIT response");
-            }
-        },
-        "XT0" => match commands::parse_xit_response(data) {
-            Ok((enabled, offset_hz)) => {
-                debug!(enabled, offset_hz, "AI XIT update");
-                let _ = event_tx.send(RigEvent::XitChanged { enabled, offset_hz });
-            }
-            Err(e) => {
-                debug!(?e, "failed to parse AI XIT response");
-            }
-        },
+        "RT" => {
+            // AI mode sends RT0; (RIT off) or RT1; (RIT on).
+            // The offset is not included — only the on/off state.
+            let enabled = data == "1";
+            debug!(enabled, "AI RIT update");
+            let _ = event_tx.send(RigEvent::RitChanged {
+                enabled,
+                offset_hz: 0,
+            });
+        }
+        "XT" => {
+            // AI mode sends XT0; (XIT off) or XT1; (XIT on).
+            let enabled = data == "1";
+            debug!(enabled, "AI XIT update");
+            let _ = event_tx.send(RigEvent::XitChanged {
+                enabled,
+                offset_hz: 0,
+            });
+        }
         _ => {
             debug!(prefix, data, "unknown AI prefix, ignoring");
         }
@@ -374,8 +375,8 @@ async fn reader_loop(
 /// - `FA014074000;` -> `"FA"`
 /// - `MD02;` -> `"MD0"`
 /// - `TX;` -> `"TX"`
-/// - `RT01+0050;` -> `"RT0"`
 /// - `SM0;` -> `"SM0"`
+/// - `RT1;` -> `"RT"`
 fn extract_command_prefix(cmd: &[u8]) -> String {
     let s = std::str::from_utf8(cmd).unwrap_or("");
     let alpha_end = s
@@ -383,8 +384,10 @@ fn extract_command_prefix(cmd: &[u8]) -> String {
         .unwrap_or(s.len());
     let alpha_prefix = &s[..alpha_end];
 
+    // Note: RT and XT are NOT included here because their trailing digit
+    // is a value parameter (0=off, 1=on), not a sub-function selector.
     const DIGIT_SUFFIX_PREFIXES: &[&str] =
-        &["MD", "RM", "SM", "SH", "NA", "AN", "PA", "RA", "RT", "XT"];
+        &["MD", "RM", "SM", "SH", "NA", "AN", "PA", "RA"];
 
     if DIGIT_SUFFIX_PREFIXES.contains(&alpha_prefix)
         && alpha_end < s.len()
@@ -657,32 +660,62 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
-    fn test_process_ai_rit() {
+    fn test_process_ai_rit_on() {
         let (event_tx, mut event_rx) = broadcast::channel(16);
 
-        process_ai_response("RT0", "1+0050", &event_tx);
+        process_ai_response("RT", "1", &event_tx);
 
         let event = event_rx.try_recv().unwrap();
         match event {
             RigEvent::RitChanged { enabled, offset_hz } => {
                 assert!(enabled);
-                assert_eq!(offset_hz, 50);
+                assert_eq!(offset_hz, 0); // AI only sends on/off, no offset
             }
             other => panic!("expected RitChanged, got {other:?}"),
         }
     }
 
     #[test]
-    fn test_process_ai_xit() {
+    fn test_process_ai_rit_off() {
         let (event_tx, mut event_rx) = broadcast::channel(16);
 
-        process_ai_response("XT0", "0+0000", &event_tx);
+        process_ai_response("RT", "0", &event_tx);
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::RitChanged { enabled, .. } => {
+                assert!(!enabled);
+            }
+            other => panic!("expected RitChanged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_process_ai_xit_on() {
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+
+        process_ai_response("XT", "1", &event_tx);
 
         let event = event_rx.try_recv().unwrap();
         match event {
             RigEvent::XitChanged { enabled, offset_hz } => {
-                assert!(!enabled);
+                assert!(enabled);
                 assert_eq!(offset_hz, 0);
+            }
+            other => panic!("expected XitChanged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_process_ai_xit_off() {
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+
+        process_ai_response("XT", "0", &event_tx);
+
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::XitChanged { enabled, .. } => {
+                assert!(!enabled);
             }
             other => panic!("expected XitChanged, got {other:?}"),
         }
@@ -768,8 +801,9 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_command_prefix_rt0() {
-        assert_eq!(extract_command_prefix(b"RT0;"), "RT0");
+    fn test_extract_command_prefix_rt() {
+        // RT is not a digit-suffix prefix; the '0' is a value parameter
+        assert_eq!(extract_command_prefix(b"RT0;"), "RT");
     }
 
     #[test]
