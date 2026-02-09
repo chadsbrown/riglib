@@ -43,7 +43,9 @@ Some serial transport implementations on Linux (particularly FTDI USB-serial ada
 
 ---
 
-## Sub-Phase A.2 — IO Types (Request/Response/RigIo/IoConfig)
+## Sub-Phase A.2 — IO Types (Request/Response/RigIo/IoConfig) ✅
+
+**Status: COMPLETE** — Created `crates/riglib-icom/src/io.rs` with `IoConfig`, `Request`, `RigIo` types and convenience methods (`command`, `ack_command`, `set_line`, `shutdown`). Added `tokio-util` workspace dependency for `CancellationToken`. 9 unit tests pass, clippy clean.
 
 **Scope:** Type definitions only, no behavioral changes. Single session. Depends on A.1.
 

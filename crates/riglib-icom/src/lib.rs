@@ -35,6 +35,7 @@
 pub mod builder;
 pub mod civ;
 pub mod commands;
+pub(crate) mod io;
 pub mod models;
 pub mod rig;
 pub mod transceive;
