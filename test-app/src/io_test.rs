@@ -2,6 +2,143 @@
 // single-IO-task design.  Tests latency, throughput, response routing,
 // priority scheduling, event delivery, and graceful shutdown against
 // real hardware (or mock transport for smoke-testing).
+//
+// # Usage
+//
+// Run all phases (PTT test requires antenna/dummy load):
+//
+//   cargo run -p riglib-test-app -- \
+//       --manufacturer icom --model IC-7610 --port /dev/ttyUSB0 \
+//       io-test
+//
+// Run all phases but skip PTT (safe, no TX):
+//
+//   cargo run -p riglib-test-app -- \
+//       --manufacturer icom --model IC-7610 --port /dev/ttyUSB0 \
+//       io-test --skip-ptt
+//
+// Run a single phase:
+//
+//   cargo run -p riglib-test-app -- \
+//       --manufacturer icom --model IC-7610 --port /dev/ttyUSB0 \
+//       io-test --phases throughput
+//
+// Run multiple specific phases:
+//
+//   cargo run -p riglib-test-app -- \
+//       --manufacturer icom --model IC-7610 --port /dev/ttyUSB0 \
+//       io-test --phases bg-correctness,throughput,roundtrip
+//
+// The shutdown phase must be run alone (it drops the rig to test cleanup):
+//
+//   cargo run -p riglib-test-app -- \
+//       --manufacturer icom --model IC-7610 --port /dev/ttyUSB0 \
+//       io-test --phases shutdown
+//
+// Tune timing parameters for your rig:
+//
+//   io-test --phase-duration 5 --poll-rate 10 --roundtrip-count 20
+//
+// # Test Phases
+//
+// ## bg-correctness
+//
+// Polls get_frequency, get_mode, and get_s_meter in round-robin at
+// `--poll-rate` Hz for `--phase-duration` seconds.  Validates that
+// the IO task handles a sustained stream of BG commands without
+// errors.
+//
+//   Pass: error rate <= `--max-error-rate` (default 1%)
+//   Key metric: cmd/s tells you the effective polling throughput.
+//
+// ## throughput
+//
+// Tight loop of get_frequency for `--phase-duration` seconds with no
+// inter-command delay.  Measures the raw command-response throughput
+// of the IO pipeline.
+//
+//   Pass: always (informational).  Use this as a baseline for
+//   comparing across rig models or before/after architecture changes.
+//   Key metric: cmd/s is the peak throughput.  p95 latency shows
+//   the tail — spikes here may indicate contention or serial
+//   buffer delays.
+//
+// ## roundtrip
+//
+// Two concurrent tokio tasks sharing an Arc<Rig>:
+//   - Poller: get_frequency + get_s_meter at `--poll-rate` Hz
+//   - Writer: `--roundtrip-count` cycles of set_frequency → 50ms
+//     sleep → get_frequency → verify match
+//
+// If the IO task misroutes responses between concurrent callers,
+// mismatches will appear here.
+//
+//   Pass: zero mismatches AND poller error rate <= `--max-error-rate`
+//   Key metric: mismatches.  Any non-zero value means the IO task
+//   is routing responses to the wrong caller.
+//
+// ## rt-priority
+//
+// Two concurrent tokio tasks:
+//   - Poller: continuous BG polling at `--poll-rate` Hz
+//   - PTT task: `--ptt-cycles` cycles of set_ptt(true) → set_ptt(false)
+//     → 200ms sleep
+//
+// Measures whether RT-priority commands (PTT) maintain low latency
+// even under BG polling load.  Each PTT call has a safety timeout
+// of `--ptt-safety-ms`; on timeout the phase aborts and PTT is
+// forced off.
+//
+//   Pass: PTT-on p95 < `--rt-threshold-ms` (default 100ms)
+//   Key metric: PTT-on p95.  If BG polling is starving RT commands,
+//   this value will exceed the threshold.
+//   Skipped if `--skip-ptt` is set.
+//
+// ## transceive
+//
+// Subscribes to rig events, then does 20 set_frequency calls with a
+// concurrent poller running.  After each set, drains the event
+// channel for up to 500ms looking for a matching FrequencyChanged
+// event.
+//
+//   Pass: >= 90% of expected events received
+//   Key metric: event receive percentage.  Low values mean the
+//   transceive listener is dropping events or not forwarding them.
+//   Skipped if the rig's capabilities report has_transceive = false.
+//
+// ## shutdown
+//
+// Creates a rig, polls at `--poll-rate` Hz for 2 seconds, then drops
+// the rig.  Tests that the IO task and transport shut down cleanly
+// without hanging.
+//
+//   Pass: process exits (if it hangs, you'll see a timeout).
+//   Must be run as `--phases shutdown` (alone).  When included in
+//   `--phases all`, it is skipped with a note.
+//
+// # Interpreting the Output
+//
+// Each phase prints a [PASS], [FAIL], or [SKIP] tag followed by a
+// summary line and latency statistics where applicable.
+//
+// Latency lines have the format:
+//
+//   n=200  min=4.2ms  avg=12.1ms  p50=11.8ms  p95=28.3ms  p99=45.1ms  max=62.0ms
+//
+//   n     — number of successful commands measured
+//   min   — fastest single command
+//   avg   — arithmetic mean
+//   p50   — median (half the commands were faster than this)
+//   p95   — 95th percentile (only 5% of commands were slower)
+//   p99   — 99th percentile (tail latency)
+//   max   — slowest single command
+//
+// For serial rigs, typical values are 3-15ms per command.  If p95 is
+// much higher than avg, there may be contention or serial buffer
+// stalls.  If p99/max are very high (>100ms), the rig may be
+// intermittently slow to respond (e.g. during internal band switching).
+//
+// The exit code is 0 if all run phases pass, 1 if any fail.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
