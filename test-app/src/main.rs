@@ -20,7 +20,10 @@
 //   riglib-test-app --manufacturer icom --model IC-7610 --port /dev/ttyUSB0 \
 //       --device "USB Audio CODEC" audio monitor --duration 30
 
+mod io_test;
+
 use std::io::{self, Write};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -299,6 +302,50 @@ enum Command {
     Audio {
         #[command(subcommand)]
         action: AudioAction,
+    },
+
+    /// IO-task architecture validation harness.
+    IoTest {
+        /// Duration of each test phase in seconds.
+        #[arg(long, default_value_t = 10)]
+        phase_duration: u64,
+
+        /// Background polling rate in Hz.
+        #[arg(long, default_value_t = 20)]
+        poll_rate: u32,
+
+        /// Number of set/get round-trip cycles for consistency test.
+        #[arg(long, default_value_t = 50)]
+        roundtrip_count: u32,
+
+        /// Number of PTT on/off cycles for RT priority test.
+        #[arg(long, default_value_t = 20)]
+        ptt_cycles: u32,
+
+        /// Receiver index (0 = VFO-A).
+        #[arg(long, default_value_t = 0)]
+        rx: u8,
+
+        /// Comma-separated phase selection: bg-correctness, throughput,
+        /// roundtrip, rt-priority, transceive, shutdown, all.
+        #[arg(long, default_value = "all")]
+        phases: String,
+
+        /// Skip the RT priority phase (avoids keying TX).
+        #[arg(long)]
+        skip_ptt: bool,
+
+        /// Max time PTT may stay keyed per cycle before abort (ms).
+        #[arg(long, default_value_t = 500)]
+        ptt_safety_ms: u64,
+
+        /// P95 latency threshold for RT pass/fail (ms).
+        #[arg(long, default_value_t = 100)]
+        rt_threshold_ms: u64,
+
+        /// Max tolerable BG error rate (0.0-1.0).
+        #[arg(long, default_value_t = 0.01)]
+        max_error_rate: f64,
     },
 }
 
@@ -2229,6 +2276,34 @@ async fn main() -> Result<()> {
                 cmd_audio_monitor(rig.as_ref(), *receiver, *duration).await
             }
         },
+        Command::IoTest {
+            phase_duration,
+            poll_rate,
+            roundtrip_count,
+            ptt_cycles,
+            rx,
+            phases,
+            skip_ptt,
+            ptt_safety_ms,
+            rt_threshold_ms,
+            max_error_rate,
+        } => {
+            let parsed_phases = io_test::parse_phases(phases)?;
+            let opts = io_test::IoTestOptions {
+                phase_duration: *phase_duration,
+                poll_rate: *poll_rate,
+                roundtrip_count: *roundtrip_count,
+                ptt_cycles: *ptt_cycles,
+                rx: *rx,
+                phases: parsed_phases,
+                skip_ptt: *skip_ptt,
+                ptt_safety_ms: *ptt_safety_ms,
+                rt_threshold_ms: *rt_threshold_ms,
+                max_error_rate: *max_error_rate,
+            };
+            let rig_arc: Arc<Box<dyn RigAudio>> = Arc::new(rig);
+            io_test::cmd_io_test(rig_arc, opts).await
+        }
         Command::List { .. } => unreachable!("list handled above"),
         Command::Discover => unreachable!("discover handled above"),
         Command::Slices => unreachable!("slices handled above"),
