@@ -390,13 +390,8 @@ async fn execute_command_on_transport(
         let mut response_buf = Vec::new();
 
         loop {
-            match tokio::time::timeout(
-                config.command_timeout,
-                transport.receive(&mut buf, config.command_timeout),
-            )
-            .await
-            {
-                Ok(Ok(n)) => {
+            match transport.receive(&mut buf, config.command_timeout).await {
+                Ok(n) => {
                     response_buf.extend_from_slice(&buf[..n]);
 
                     // Try to decode responses from accumulated data.
@@ -439,7 +434,7 @@ async fn execute_command_on_transport(
                         }
                     }
                 }
-                Ok(Err(Error::Timeout)) => {
+                Err(Error::Timeout) => {
                     // Transport timed out. Try to decode what we have.
                     if !response_buf.is_empty() {
                         match protocol::decode_response(&response_buf) {
@@ -462,29 +457,7 @@ async fn execute_command_on_transport(
                     }
                     break; // Move to next retry attempt.
                 }
-                Ok(Err(e)) => return Err(e),
-                Err(_) => {
-                    // tokio::time::timeout expired.
-                    if !response_buf.is_empty() {
-                        match protocol::decode_response(&response_buf) {
-                            protocol::DecodeResult::Response { prefix, data, .. } => {
-                                if prefix == expected_prefix {
-                                    return Ok((prefix, data));
-                                }
-                                if is_ai_prefix(&prefix) {
-                                    process_ai_response(&prefix, &data, event_tx);
-                                }
-                            }
-                            protocol::DecodeResult::Error(_) => {
-                                return Err(Error::Protocol(
-                                    "rig returned error response (?;)".into(),
-                                ));
-                            }
-                            protocol::DecodeResult::Incomplete => {}
-                        }
-                    }
-                    break; // Move to next retry attempt.
-                }
+                Err(e) => return Err(e),
             }
         }
     }

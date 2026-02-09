@@ -252,13 +252,8 @@ impl ElecraftRig {
             let mut response_buf = Vec::new();
 
             loop {
-                match tokio::time::timeout(
-                    self.command_timeout,
-                    transport.receive(&mut buf, self.command_timeout),
-                )
-                .await
-                {
-                    Ok(Ok(n)) => {
+                match transport.receive(&mut buf, self.command_timeout).await {
+                    Ok(n) => {
                         response_buf.extend_from_slice(&buf[..n]);
 
                         // Attempt to decode a response from accumulated data.
@@ -282,7 +277,7 @@ impl ElecraftRig {
                             }
                         }
                     }
-                    Ok(Err(Error::Timeout)) => {
+                    Err(Error::Timeout) => {
                         // Transport timed out. Try to decode what we have.
                         if !response_buf.is_empty() {
                             match protocol::decode_response(&response_buf) {
@@ -299,24 +294,7 @@ impl ElecraftRig {
                         }
                         break; // Move to next retry attempt.
                     }
-                    Ok(Err(e)) => return Err(e),
-                    Err(_) => {
-                        // tokio::time::timeout expired.
-                        if !response_buf.is_empty() {
-                            match protocol::decode_response(&response_buf) {
-                                DecodeResult::Response { prefix, data, .. } => {
-                                    return Ok((prefix, data));
-                                }
-                                DecodeResult::Error(_) => {
-                                    return Err(Error::Protocol(
-                                        "rig returned error response (?;)".into(),
-                                    ));
-                                }
-                                DecodeResult::Incomplete => {}
-                            }
-                        }
-                        break; // Move to next retry attempt.
-                    }
+                    Err(e) => return Err(e),
                 }
             }
         }
@@ -356,13 +334,8 @@ impl ElecraftRig {
             let mut drain_buf = Vec::new();
 
             loop {
-                match tokio::time::timeout(
-                    drain_timeout,
-                    transport.receive(&mut buf, drain_timeout),
-                )
-                .await
-                {
-                    Ok(Ok(n)) => {
+                match transport.receive(&mut buf, drain_timeout).await {
+                    Ok(n) => {
                         drain_buf.extend_from_slice(&buf[..n]);
                         match protocol::decode_response(&drain_buf) {
                             DecodeResult::Error(_) => {
@@ -374,7 +347,7 @@ impl ElecraftRig {
                             DecodeResult::Incomplete => {}
                         }
                     }
-                    Ok(Err(Error::Timeout)) | Err(_) => {
+                    Err(Error::Timeout) => {
                         if !drain_buf.is_empty() {
                             if let DecodeResult::Error(_) = protocol::decode_response(&drain_buf) {
                                 return Err(Error::Protocol(
@@ -384,7 +357,7 @@ impl ElecraftRig {
                         }
                         break;
                     }
-                    Ok(Err(e)) => return Err(e),
+                    Err(e) => return Err(e),
                 }
             }
         }

@@ -267,13 +267,8 @@ impl IcomRig {
             let mut response_buf = Vec::new();
 
             loop {
-                match tokio::time::timeout(
-                    self.command_timeout,
-                    transport.receive(&mut buf, self.command_timeout),
-                )
-                .await
-                {
-                    Ok(Ok(n)) => {
+                match transport.receive(&mut buf, self.command_timeout).await {
+                    Ok(n) => {
                         response_buf.extend_from_slice(&buf[..n]);
 
                         // Attempt to decode frames from the accumulated buffer.
@@ -335,7 +330,7 @@ impl IcomRig {
                             break;
                         }
                     }
-                    Ok(Err(Error::Timeout)) => {
+                    Err(Error::Timeout) => {
                         // Transport timed out waiting for data. If we have
                         // accumulated partial data, try one more decode pass.
                         if !response_buf.is_empty() {
@@ -352,22 +347,7 @@ impl IcomRig {
                         // Move on to next retry attempt.
                         break;
                     }
-                    Ok(Err(e)) => return Err(e),
-                    Err(_) => {
-                        // tokio::time::timeout expired.
-                        if !response_buf.is_empty() {
-                            if let DecodeResult::Frame(frame, _) = civ::decode_frame(&response_buf)
-                            {
-                                if frame.dst_addr == CONTROLLER_ADDR
-                                    && frame.src_addr == self.civ_address
-                                    && !frame.is_nak()
-                                {
-                                    return Ok(frame);
-                                }
-                            }
-                        }
-                        break;
-                    }
+                    Err(e) => return Err(e),
                 }
             }
         }

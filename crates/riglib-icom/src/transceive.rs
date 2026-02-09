@@ -287,13 +287,8 @@ async fn execute_command_on_transport(
         let mut response_buf = Vec::new();
 
         loop {
-            match tokio::time::timeout(
-                config.command_timeout,
-                transport.receive(&mut buf, config.command_timeout),
-            )
-            .await
-            {
-                Ok(Ok(n)) => {
+            match transport.receive(&mut buf, config.command_timeout).await {
+                Ok(n) => {
                     response_buf.extend_from_slice(&buf[..n]);
 
                     loop {
@@ -347,7 +342,7 @@ async fn execute_command_on_transport(
                         break;
                     }
                 }
-                Ok(Err(Error::Timeout)) => {
+                Err(Error::Timeout) => {
                     if !response_buf.is_empty() {
                         if let DecodeResult::Frame(frame, _) = civ::decode_frame(&response_buf) {
                             if frame.dst_addr == CONTROLLER_ADDR
@@ -360,21 +355,7 @@ async fn execute_command_on_transport(
                     }
                     break;
                 }
-                Ok(Err(e)) => return Err(e),
-                Err(_) => {
-                    // tokio::time::timeout expired.
-                    if !response_buf.is_empty() {
-                        if let DecodeResult::Frame(frame, _) = civ::decode_frame(&response_buf) {
-                            if frame.dst_addr == CONTROLLER_ADDR
-                                && frame.src_addr == civ_address
-                                && !frame.is_nak()
-                            {
-                                return Ok(frame);
-                            }
-                        }
-                    }
-                    break;
-                }
+                Err(e) => return Err(e),
             }
         }
     }

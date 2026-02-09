@@ -6,7 +6,9 @@
 
 ---
 
-## Sub-Phase A.1 — Timeout Unification
+## Sub-Phase A.1 — Timeout Unification ✅
+
+**Status: COMPLETE** — Removed 11 double-timeout sites across 8 files (icom, yaesu, kenwood, elecraft rig.rs + transceive.rs). All 1,850+ workspace tests pass, clippy clean.
 
 **Scope:** Standalone cleanup, no structural change. Single session.
 

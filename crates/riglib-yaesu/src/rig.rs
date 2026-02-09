@@ -253,13 +253,8 @@ impl YaesuRig {
             let mut drain_buf = Vec::new();
 
             loop {
-                match tokio::time::timeout(
-                    drain_timeout,
-                    transport.receive(&mut buf, drain_timeout),
-                )
-                .await
-                {
-                    Ok(Ok(n)) => {
+                match transport.receive(&mut buf, drain_timeout).await {
+                    Ok(n) => {
                         drain_buf.extend_from_slice(&buf[..n]);
                         // Check if we got an error response.
                         match protocol::decode_response(&drain_buf) {
@@ -280,7 +275,7 @@ impl YaesuRig {
                             }
                         }
                     }
-                    Ok(Err(Error::Timeout)) | Err(_) => {
+                    Err(Error::Timeout) => {
                         // Timeout is success for SET commands -- radio sent nothing back.
                         // But check if we accumulated an error response.
                         if !drain_buf.is_empty() {
@@ -292,7 +287,7 @@ impl YaesuRig {
                         }
                         break;
                     }
-                    Ok(Err(e)) => return Err(e),
+                    Err(e) => return Err(e),
                 }
             }
         }
@@ -371,13 +366,8 @@ impl YaesuRig {
             let mut response_buf = Vec::new();
 
             loop {
-                match tokio::time::timeout(
-                    self.command_timeout,
-                    transport.receive(&mut buf, self.command_timeout),
-                )
-                .await
-                {
-                    Ok(Ok(n)) => {
+                match transport.receive(&mut buf, self.command_timeout).await {
+                    Ok(n) => {
                         response_buf.extend_from_slice(&buf[..n]);
 
                         // Try to decode a complete response from the buffer.
@@ -399,7 +389,7 @@ impl YaesuRig {
                             }
                         }
                     }
-                    Ok(Err(Error::Timeout)) => {
+                    Err(Error::Timeout) => {
                         // Transport timed out waiting for data. Try one
                         // more decode pass on what we have.
                         if !response_buf.is_empty() {
@@ -422,28 +412,7 @@ impl YaesuRig {
                         // Move to next retry attempt.
                         break;
                     }
-                    Ok(Err(e)) => return Err(e),
-                    Err(_) => {
-                        // tokio::time::timeout expired.
-                        if !response_buf.is_empty() {
-                            match protocol::decode_response(&response_buf) {
-                                DecodeResult::Response {
-                                    prefix,
-                                    data,
-                                    consumed: _,
-                                } => {
-                                    return Ok((prefix, data));
-                                }
-                                DecodeResult::Error(_) => {
-                                    return Err(Error::Protocol(
-                                        "rig returned error response (?;)".into(),
-                                    ));
-                                }
-                                DecodeResult::Incomplete => {}
-                            }
-                        }
-                        break;
-                    }
+                    Err(e) => return Err(e),
                 }
             }
         }
