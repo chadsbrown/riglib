@@ -281,7 +281,9 @@ async fn io_loop(
 
 ---
 
-## Sub-Phase A.4 — Builder Wiring
+## Sub-Phase A.4 — Builder Wiring ✅
+
+**Status: COMPLETE** — Builder now spawns IO task unconditionally via `spawn_io_task()`. `IcomRig` struct replaced `Arc<Mutex<Transport>>` + `transceive_handle` with `RigIo`. Dispatch methods (`execute_command`, `execute_ack_command`, `set_serial_line`) are thin wrappers over `RigIo`. Deleted `execute_command_direct`, `execute_command_via_channel`, `start_transceive`. `enable/disable_transceive` are no-ops. All 62 rig.rs tests migrated to async `make_test_rig()` using builder. 3 direct `IcomRig::new()` test sites + audio test helper converted. All 1,876 workspace tests pass, clippy clean.
 
 **Scope:** Wire builder to always spawn IO task. Single session. Depends on A.3.
 
