@@ -284,9 +284,8 @@ async fn io_loop(
 /// Execute a CI-V command on the transport, handling echo, collision,
 /// retry, and interleaved transceive frames.
 ///
-/// This is the unified implementation that replaces both
-/// `execute_command_direct` (rig.rs) and `execute_command_on_transport`
-/// (transceive.rs).
+/// This is the unified implementation that handles all CI-V command
+/// exchanges through the IO task.
 async fn execute_civ_command(
     transport: &mut dyn Transport,
     cmd: &[u8],

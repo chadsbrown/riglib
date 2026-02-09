@@ -332,7 +332,9 @@ IO task owns the `broadcast::Sender<RigEvent>`. Rig clones the sender or holds i
 
 ---
 
-## Sub-Phase A.5 — Delete Direct Path
+## Sub-Phase A.5 — Delete Direct Path ✅
+
+**Status: COMPLETE** — Deleted `CommandRequest`, `TransceiveHandle`, `ReaderConfig`, `DisconnectedTransport`, `spawn_reader_task()`, `reader_loop()`, `execute_command_on_transport()` and unused imports from `transceive.rs` (813→501 lines). Updated module doc comment. Changed `pub mod transceive` to `pub(crate) mod transceive` in `lib.rs`. Updated `io.rs` doc comment. All 1,876 workspace tests pass, clippy clean (3 remaining warnings are A.6 scope).
 
 **Scope:** Remove `execute_command_direct()` and all direct-mode branching. Single session. Depends on A.4.
 

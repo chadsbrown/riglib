@@ -38,7 +38,7 @@ pub mod commands;
 pub(crate) mod io;
 pub mod models;
 pub mod rig;
-pub mod transceive;
+pub(crate) mod transceive;
 
 pub use builder::IcomBuilder;
 pub use rig::IcomRig;
