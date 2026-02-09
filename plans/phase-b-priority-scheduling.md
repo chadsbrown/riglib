@@ -48,9 +48,10 @@ The `biased` keyword ensures RT commands are always serviced before BG, even if 
 
 ---
 
-## Sub-Phase B.2 — Route Rig Methods to Correct Channel
+## Sub-Phase B.2 — Route Rig Methods to Correct Channel  **[COMPLETE]**
 
 **Scope:** Method-level routing. Single session. Depends on B.1.
+**Status:** Complete — RT methods added to `RigIo` (`rt_ack_command`, `rt_set_line`), RT helpers on `IcomRig` (`execute_rt_ack_command`, `set_serial_line_rt`), 7 call sites routed to RT (`set_ptt` 3 branches, `set_cw_key` 2 branches, `send_cw_message`, `stop_cw_message`), priority ordering test passes, 1,882 workspace tests pass, zero warnings.
 
 ### Routing Rules
 

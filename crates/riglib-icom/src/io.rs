@@ -69,8 +69,7 @@ pub(crate) enum Request {
 /// Handle to the IO task. Stored inside `IcomRig`.
 pub(crate) struct RigIo {
     /// Real-time command channel — checked first in the IO loop's biased select.
-    /// Used by B.2 to route PTT/CW commands for priority dispatch.
-    #[allow(dead_code)]
+    /// Used for PTT/CW commands that need priority dispatch.
     pub rt_tx: mpsc::Sender<Request>,
     /// Background command channel — checked after RT in the IO loop.
     pub bg_tx: mpsc::Sender<Request>,
@@ -119,10 +118,51 @@ impl RigIo {
         }
     }
 
-    /// Toggle a serial control line (DTR or RTS).
+    /// Toggle a serial control line (DTR or RTS) via the background channel.
+    #[allow(dead_code)] // Used by tests to exercise the BG path.
     pub async fn set_line(&self, dtr: bool, on: bool) -> Result<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.bg_tx
+            .send(Request::SetLine {
+                dtr,
+                on,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| Error::NotConnected)?;
+
+        match reply_rx.await {
+            Ok(result) => result,
+            Err(_) => Err(Error::NotConnected),
+        }
+    }
+
+    /// Send a fire-and-forget CI-V SET command via the real-time channel.
+    ///
+    /// Identical to [`ack_command`] but routes through `rt_tx`.
+    pub async fn rt_ack_command(&self, cmd: Vec<u8>, timeout: Duration) -> Result<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.rt_tx
+            .send(Request::CivAckCommand {
+                cmd_bytes: cmd,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| Error::NotConnected)?;
+
+        match tokio::time::timeout(timeout + Duration::from_millis(500), reply_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(Error::NotConnected),
+            Err(_) => Err(Error::Timeout),
+        }
+    }
+
+    /// Toggle a serial control line via the real-time channel.
+    ///
+    /// Identical to [`set_line`] but routes through `rt_tx`.
+    pub async fn rt_set_line(&self, dtr: bool, on: bool) -> Result<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.rt_tx
             .send(Request::SetLine {
                 dtr,
                 on,
@@ -937,6 +977,137 @@ mod tests {
 
         let _ = io.shutdown().await;
     }
+
+    // =======================================================================
+    // B.2 — RT channel tests
+    // =======================================================================
+
+    #[tokio::test]
+    async fn io_task_rt_ack_command() {
+        let mut mock = MockTransport::new();
+
+        // PTT ON via RT channel.
+        let cmd = encode_frame(IC7610_ADDR, CONTROLLER_ADDR, 0x1C, Some(0x00), &[0x01]);
+        let ack = encode_frame(CONTROLLER_ADDR, IC7610_ADDR, civ::ACK, None, &[]);
+        mock.expect(&cmd, &ack);
+
+        let (event_tx, _) = broadcast::channel(16);
+        let io = spawn_io_task(Box::new(mock), test_config(), event_tx);
+
+        let result = io.rt_ack_command(cmd, Duration::from_millis(500)).await;
+        assert!(result.is_ok());
+
+        let _ = io.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn io_task_rt_set_line_dtr() {
+        let mock = MockTransport::new();
+        let (event_tx, _) = broadcast::channel(16);
+        let io = spawn_io_task(Box::new(mock), test_config(), event_tx);
+
+        let result = io.rt_set_line(true, true).await;
+        assert!(result.is_ok());
+
+        let _ = io.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn io_task_rt_set_line_rts() {
+        let mock = MockTransport::new();
+        let (event_tx, _) = broadcast::channel(16);
+        let io = spawn_io_task(Box::new(mock), test_config(), event_tx);
+
+        let result = io.rt_set_line(false, true).await;
+        assert!(result.is_ok());
+
+        let _ = io.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn io_task_rt_priority_over_bg() {
+        // Verify that biased select processes RT commands before BG,
+        // even when BG commands were enqueued first.
+        //
+        // The mock's FIFO expectation queue is loaded in RT-first order.
+        // If the IO loop processed BG before RT, the mock would see
+        // mismatched bytes and return a protocol error.
+        let mut mock = MockTransport::new();
+
+        let rt_cmd = encode_frame(IC7610_ADDR, CONTROLLER_ADDR, 0x1C, Some(0x00), &[0x01]);
+        let rt_ack = encode_frame(CONTROLLER_ADDR, IC7610_ADDR, civ::ACK, None, &[]);
+
+        let bg_cmd = encode_frame(IC7610_ADDR, CONTROLLER_ADDR, 0x03, None, &[]);
+        let bg_resp = encode_frame(
+            CONTROLLER_ADDR,
+            IC7610_ADDR,
+            0x03,
+            Some(0x00),
+            &[0x00, 0x60, 0x14, 0x00],
+        );
+
+        // Expectations in RT-first order.
+        mock.expect(&rt_cmd, &rt_ack);
+        mock.expect(&bg_cmd, &bg_resp);
+        mock.expect(&bg_cmd, &bg_resp);
+        mock.expect(&bg_cmd, &bg_resp);
+
+        let (event_tx, _) = broadcast::channel(16);
+        let cancel = CancellationToken::new();
+        let (rt_tx, rt_rx) = mpsc::channel::<Request>(32);
+        let (bg_tx, bg_rx) = mpsc::channel::<Request>(32);
+
+        // Pre-fill BG channel with 3 commands BEFORE starting the IO loop.
+        let mut bg_replies = Vec::new();
+        for _ in 0..3 {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            bg_tx
+                .send(Request::CivCommand {
+                    cmd_bytes: bg_cmd.clone(),
+                    reply: reply_tx,
+                })
+                .await
+                .unwrap();
+            bg_replies.push(reply_rx);
+        }
+
+        // Pre-fill RT channel with 1 command.
+        let (rt_reply_tx, rt_reply_rx) = oneshot::channel();
+        rt_tx
+            .send(Request::CivAckCommand {
+                cmd_bytes: rt_cmd.clone(),
+                reply: rt_reply_tx,
+            })
+            .await
+            .unwrap();
+
+        // Spawn the IO loop directly to test biased select behavior.
+        let task = tokio::spawn(io_loop(
+            Box::new(mock),
+            test_config(),
+            event_tx,
+            rt_rx,
+            bg_rx,
+            cancel.clone(),
+        ));
+
+        // All commands should succeed. If RT wasn't processed first,
+        // the mock would return a protocol error due to byte mismatch.
+        let rt_result = rt_reply_rx.await.unwrap();
+        assert!(rt_result.is_ok(), "RT command failed: {rt_result:?}");
+
+        for (i, reply_rx) in bg_replies.into_iter().enumerate() {
+            let bg_result = reply_rx.await.unwrap();
+            assert!(bg_result.is_ok(), "BG command {i} failed: {bg_result:?}");
+        }
+
+        cancel.cancel();
+        let _ = task.await;
+    }
+
+    // =======================================================================
+    // Idle frame processing tests
+    // =======================================================================
 
     #[test]
     fn drain_idle_frames_consumes_complete_frames() {

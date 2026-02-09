@@ -127,14 +127,26 @@ impl IcomRig {
         self.io.command(cmd.to_vec(), self.command_timeout).await
     }
 
-    /// Set a serial control line (DTR or RTS) via the IO task.
-    async fn set_serial_line(&self, dtr: bool, on: bool) -> Result<()> {
-        self.io.set_line(dtr, on).await
-    }
-
     /// Execute a command and expect an ACK frame in return.
     async fn execute_ack_command(&self, cmd: &[u8]) -> Result<()> {
         self.io.ack_command(cmd.to_vec(), self.command_timeout).await
+    }
+
+    /// Execute a CI-V SET command via the real-time (priority) channel.
+    ///
+    /// Used for time-critical operations (PTT, CW keying) that must not
+    /// be delayed by background polling traffic.
+    async fn execute_rt_ack_command(&self, cmd: &[u8]) -> Result<()> {
+        self.io
+            .rt_ack_command(cmd.to_vec(), self.command_timeout)
+            .await
+    }
+
+    /// Set a serial control line (DTR or RTS) via the real-time channel.
+    ///
+    /// Used for hardware PTT/CW keying where sub-millisecond latency matters.
+    async fn set_serial_line_rt(&self, dtr: bool, on: bool) -> Result<()> {
+        self.io.rt_set_line(dtr, on).await
     }
 
     /// Select the appropriate receiver/VFO before a frequency or mode command.
@@ -360,15 +372,15 @@ impl Rig for IcomRig {
             PttMethod::Cat => {
                 let cmd = commands::cmd_set_ptt(self.civ_address, on);
                 debug!(on, "setting PTT via CAT");
-                self.execute_ack_command(&cmd).await?;
+                self.execute_rt_ack_command(&cmd).await?;
             }
             PttMethod::Dtr => {
                 debug!(on, "setting PTT via DTR");
-                self.set_serial_line(true, on).await?;
+                self.set_serial_line_rt(true, on).await?;
             }
             PttMethod::Rts => {
                 debug!(on, "setting PTT via RTS");
-                self.set_serial_line(false, on).await?;
+                self.set_serial_line_rt(false, on).await?;
             }
         }
         let _ = self.event_tx.send(RigEvent::PttChanged { on });
@@ -463,11 +475,11 @@ impl Rig for IcomRig {
             KeyLine::None => Err(Error::Unsupported("no CW key line configured".into())),
             KeyLine::Dtr => {
                 debug!(on, "setting CW key via DTR");
-                self.set_serial_line(true, on).await
+                self.set_serial_line_rt(true, on).await
             }
             KeyLine::Rts => {
                 debug!(on, "setting CW key via RTS");
-                self.set_serial_line(false, on).await
+                self.set_serial_line_rt(false, on).await
             }
         }
     }
@@ -852,7 +864,7 @@ impl Rig for IcomRig {
         for chunk in &chunks {
             let cmd = commands::cmd_send_cw_message(self.civ_address, chunk);
             debug!(chunk, "sending CW message chunk");
-            self.execute_ack_command(&cmd).await?;
+            self.execute_rt_ack_command(&cmd).await?;
         }
         Ok(())
     }
@@ -860,7 +872,7 @@ impl Rig for IcomRig {
     async fn stop_cw_message(&self) -> Result<()> {
         let cmd = commands::cmd_stop_cw_message(self.civ_address);
         debug!("stopping CW message");
-        self.execute_ack_command(&cmd).await
+        self.execute_rt_ack_command(&cmd).await
     }
 
     async fn enable_transceive(&self) -> Result<()> {
