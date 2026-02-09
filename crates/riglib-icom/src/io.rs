@@ -68,8 +68,12 @@ pub(crate) enum Request {
 
 /// Handle to the IO task. Stored inside `IcomRig`.
 pub(crate) struct RigIo {
-    /// Command channel (single for now; Phase B splits into rt_tx/bg_tx).
-    pub cmd_tx: mpsc::Sender<Request>,
+    /// Real-time command channel — checked first in the IO loop's biased select.
+    /// Used by B.2 to route PTT/CW commands for priority dispatch.
+    #[allow(dead_code)]
+    pub rt_tx: mpsc::Sender<Request>,
+    /// Background command channel — checked after RT in the IO loop.
+    pub bg_tx: mpsc::Sender<Request>,
     /// Cancellation token for graceful shutdown.
     pub cancel: CancellationToken,
     /// Join handle for the IO task.
@@ -80,7 +84,7 @@ impl RigIo {
     /// Send a CI-V command and await the response.
     pub async fn command(&self, cmd: Vec<u8>, timeout: Duration) -> Result<CivFrame> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.cmd_tx
+        self.bg_tx
             .send(Request::CivCommand {
                 cmd_bytes: cmd,
                 reply: reply_tx,
@@ -100,7 +104,7 @@ impl RigIo {
     /// Send a fire-and-forget CI-V SET command and await the ACK.
     pub async fn ack_command(&self, cmd: Vec<u8>, timeout: Duration) -> Result<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.cmd_tx
+        self.bg_tx
             .send(Request::CivAckCommand {
                 cmd_bytes: cmd,
                 reply: reply_tx,
@@ -118,7 +122,7 @@ impl RigIo {
     /// Toggle a serial control line (DTR or RTS).
     pub async fn set_line(&self, dtr: bool, on: bool) -> Result<()> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.cmd_tx
+        self.bg_tx
             .send(Request::SetLine {
                 dtr,
                 on,
@@ -138,7 +142,7 @@ impl RigIo {
     pub async fn shutdown(self) -> Result<Box<dyn Transport>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self
-            .cmd_tx
+            .bg_tx
             .send(Request::Shutdown { reply: reply_tx })
             .await;
         let transport = reply_rx.await.map_err(|_| Error::NotConnected)?;
@@ -161,14 +165,16 @@ pub(crate) fn spawn_io_task(
     config: IoConfig,
     event_tx: broadcast::Sender<RigEvent>,
 ) -> RigIo {
-    let (cmd_tx, cmd_rx) = mpsc::channel::<Request>(32);
+    let (rt_tx, rt_rx) = mpsc::channel::<Request>(32);
+    let (bg_tx, bg_rx) = mpsc::channel::<Request>(32);
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
 
-    let task = tokio::spawn(io_loop(transport, config, event_tx, cmd_rx, cancel_clone));
+    let task = tokio::spawn(io_loop(transport, config, event_tx, rt_rx, bg_rx, cancel_clone));
 
     RigIo {
-        cmd_tx,
+        rt_tx,
+        bg_tx,
         cancel,
         task,
     }
@@ -185,13 +191,15 @@ const MAX_IDLE_BUF: usize = 4096;
 ///
 /// Uses `tokio::select! { biased; }` to prioritize:
 /// 1. Cancellation
-/// 2. Command dispatch
-/// 3. Idle unsolicited frame reading
+/// 2. Real-time (RT) command dispatch
+/// 3. Background (BG) command dispatch
+/// 4. Idle unsolicited frame reading
 async fn io_loop(
     mut transport: Box<dyn Transport>,
     config: IoConfig,
     event_tx: broadcast::Sender<RigEvent>,
-    mut cmd_rx: mpsc::Receiver<Request>,
+    mut rt_rx: mpsc::Receiver<Request>,
+    mut bg_rx: mpsc::Receiver<Request>,
     cancel: CancellationToken,
 ) {
     let mut idle_buf = Vec::new();
@@ -205,40 +213,31 @@ async fn io_loop(
                 break;
             }
 
-            cmd = cmd_rx.recv() => {
-                match cmd {
-                    Some(Request::CivCommand { cmd_bytes, reply }) => {
-                        let result = execute_civ_command(
-                            &mut *transport,
-                            &cmd_bytes,
-                            &config,
-                            if config.ai_enabled { Some(&event_tx) } else { None },
-                        ).await;
-                        let _ = reply.send(result);
-                    }
-                    Some(Request::CivAckCommand { cmd_bytes, reply }) => {
-                        let result = execute_civ_ack_command(
-                            &mut *transport,
-                            &cmd_bytes,
-                            &config,
-                        ).await;
-                        let _ = reply.send(result);
-                    }
-                    Some(Request::SetLine { dtr, on, reply }) => {
-                        let result = if dtr {
-                            transport.set_dtr(on).await
-                        } else {
-                            transport.set_rts(on).await
-                        };
-                        let _ = reply.send(result);
-                    }
+            req = rt_rx.recv() => {
+                match req {
                     Some(Request::Shutdown { reply }) => {
-                        debug!("IO task shutdown requested");
+                        debug!("IO task shutdown requested (RT)");
                         let _ = reply.send(transport);
                         return;
                     }
+                    Some(req) => handle_request(req, &mut transport, &config, &event_tx).await,
                     None => {
-                        debug!("all command senders dropped, exiting IO task");
+                        debug!("RT channel closed, exiting IO task");
+                        break;
+                    }
+                }
+            }
+
+            req = bg_rx.recv() => {
+                match req {
+                    Some(Request::Shutdown { reply }) => {
+                        debug!("IO task shutdown requested (BG)");
+                        let _ = reply.send(transport);
+                        return;
+                    }
+                    Some(req) => handle_request(req, &mut transport, &config, &event_tx).await,
+                    None => {
+                        debug!("BG channel closed, exiting IO task");
                         break;
                     }
                 }
@@ -276,6 +275,49 @@ async fn io_loop(
                 }
             } => {}
         }
+    }
+}
+
+/// Dispatch a single request on the transport.
+///
+/// Shared by both the RT and BG select arms — the IO loop determines
+/// priority; this function handles execution.
+///
+/// `Shutdown` is handled inline in the IO loop because it requires
+/// moving ownership of the transport.
+async fn handle_request(
+    req: Request,
+    transport: &mut Box<dyn Transport>,
+    config: &IoConfig,
+    event_tx: &broadcast::Sender<RigEvent>,
+) {
+    match req {
+        Request::CivCommand { cmd_bytes, reply } => {
+            let result = execute_civ_command(
+                &mut **transport,
+                &cmd_bytes,
+                config,
+                if config.ai_enabled { Some(event_tx) } else { None },
+            ).await;
+            let _ = reply.send(result);
+        }
+        Request::CivAckCommand { cmd_bytes, reply } => {
+            let result = execute_civ_ack_command(
+                &mut **transport,
+                &cmd_bytes,
+                config,
+            ).await;
+            let _ = reply.send(result);
+        }
+        Request::SetLine { dtr, on, reply } => {
+            let result = if dtr {
+                transport.set_dtr(on).await
+            } else {
+                transport.set_rts(on).await
+            };
+            let _ = reply.send(result);
+        }
+        Request::Shutdown { .. } => unreachable!("Shutdown handled in io_loop"),
     }
 }
 
@@ -553,51 +595,52 @@ mod tests {
 
     #[tokio::test]
     async fn rig_io_command_not_connected() {
-        let (cmd_tx, _cmd_rx) = mpsc::channel(32);
-        drop(_cmd_rx);
+        let (bg_tx, _rx) = mpsc::channel(32);
+        drop(_rx);
 
         let cancel = CancellationToken::new();
         let task = tokio::spawn(async {});
 
-        let io = RigIo { cmd_tx, cancel, task };
+        let io = RigIo { rt_tx: bg_tx.clone(), bg_tx, cancel, task };
         let result = io.command(vec![0x03], Duration::from_millis(100)).await;
         assert!(matches!(result, Err(Error::NotConnected)));
     }
 
     #[tokio::test]
     async fn rig_io_ack_command_not_connected() {
-        let (cmd_tx, _cmd_rx) = mpsc::channel(32);
-        drop(_cmd_rx);
+        let (bg_tx, _rx) = mpsc::channel(32);
+        drop(_rx);
 
         let cancel = CancellationToken::new();
         let task = tokio::spawn(async {});
 
-        let io = RigIo { cmd_tx, cancel, task };
+        let io = RigIo { rt_tx: bg_tx.clone(), bg_tx, cancel, task };
         let result = io.ack_command(vec![0x1C, 0x00, 0x01], Duration::from_millis(100)).await;
         assert!(matches!(result, Err(Error::NotConnected)));
     }
 
     #[tokio::test]
     async fn rig_io_set_line_not_connected() {
-        let (cmd_tx, _cmd_rx) = mpsc::channel(32);
-        drop(_cmd_rx);
+        let (bg_tx, _rx) = mpsc::channel(32);
+        drop(_rx);
 
         let cancel = CancellationToken::new();
         let task = tokio::spawn(async {});
 
-        let io = RigIo { cmd_tx, cancel, task };
+        let io = RigIo { rt_tx: bg_tx.clone(), bg_tx, cancel, task };
         let result = io.set_line(true, true).await;
         assert!(matches!(result, Err(Error::NotConnected)));
     }
 
     #[tokio::test]
     async fn rig_io_command_receives_response() {
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<Request>(32);
+        let (bg_tx, mut cmd_rx) = mpsc::channel::<Request>(32);
         let cancel = CancellationToken::new();
         let task = tokio::spawn(async {});
 
         let io = RigIo {
-            cmd_tx,
+            rt_tx: bg_tx.clone(),
+            bg_tx,
             cancel,
             task,
         };
@@ -626,12 +669,13 @@ mod tests {
 
     #[tokio::test]
     async fn rig_io_ack_command_receives_ok() {
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<Request>(32);
+        let (bg_tx, mut cmd_rx) = mpsc::channel::<Request>(32);
         let cancel = CancellationToken::new();
         let task = tokio::spawn(async {});
 
         let io = RigIo {
-            cmd_tx,
+            rt_tx: bg_tx.clone(),
+            bg_tx,
             cancel,
             task,
         };

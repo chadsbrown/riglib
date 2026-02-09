@@ -2250,7 +2250,7 @@ mod tests {
         // Spawn a command that will hang (no response from mock).
         let cmd = civ::encode_frame(IC7610_ADDR, CONTROLLER_ADDR, 0x03, None, &[]);
         let cmd_task = tokio::spawn({
-            let io_cmd_tx = io.cmd_tx.clone();
+            let io_bg_tx = io.bg_tx.clone();
             let timeout = std::time::Duration::from_millis(5000);
             async move {
                 use crate::io::RigIo;
@@ -2258,7 +2258,8 @@ mod tests {
 
                 // We need a RigIo to call .command() — build a temporary one.
                 let temp_io = RigIo {
-                    cmd_tx: io_cmd_tx,
+                    rt_tx: io_bg_tx.clone(),
+                    bg_tx: io_bg_tx,
                     cancel: CancellationToken::new(),
                     task: tokio::spawn(async {}),
                 };

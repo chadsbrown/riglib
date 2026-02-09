@@ -12,9 +12,10 @@ At 35 WPM CW (typical for competitive CQWW or WPX CW), inter-character timing is
 
 ---
 
-## Sub-Phase B.1 — Split Command Channel into RT/BG
+## Sub-Phase B.1 — Split Command Channel into RT/BG  **[COMPLETE]**
 
 **Scope:** Channel plumbing only. Single session.
+**Status:** Complete — `RigIo` has `rt_tx`/`bg_tx`, IO loop has biased select (cancel > RT > BG > idle), `handle_request()` helper extracted, 1,878 workspace tests pass, zero warnings.
 
 ### Changes
 
