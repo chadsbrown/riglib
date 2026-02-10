@@ -47,7 +47,6 @@ pub mod commands;
 pub mod models;
 pub mod protocol;
 pub mod rig;
-pub mod transceive;
 
 // Re-export the primary types for ergonomic `use riglib_kenwood::*`.
 pub use builder::KenwoodBuilder;

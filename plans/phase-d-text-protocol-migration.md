@@ -131,7 +131,7 @@ Build comprehensive tests for the generic text IO task:
 
 ---
 
-## Sub-Phase D.2 — Migrate Kenwood Backend
+## Sub-Phase D.2 — Migrate Kenwood Backend ✅ COMPLETE
 
 **Scope:** Simplest text-protocol migration. One session. Depends on D.1.
 

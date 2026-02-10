@@ -12,11 +12,10 @@
 //! - Split is managed via independent `FR`/`FT` commands for RX/TX VFO
 //! - AI (Auto Information) mode pushes unsolicited state changes
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::broadcast;
 use tracing::debug;
 
 use riglib_core::error::{Error, Result};
@@ -30,26 +29,110 @@ use riglib_core::audio::{AudioCapable, AudioReceiver, AudioSender, AudioStreamCo
 
 use crate::commands;
 use crate::models::{AgcCommandStyle, KenwoodModel};
-use crate::protocol::{self, DecodeResult};
-use crate::transceive::{self, CommandRequest, TransceiveHandle};
+
+// ---------------------------------------------------------------------------
+// KenwoodAiHandler — processes unsolicited AI frames from Kenwood rigs
+// ---------------------------------------------------------------------------
+
+/// AI handler for Kenwood rigs.
+///
+/// Processes unsolicited Auto Information frames and emits the corresponding
+/// [`RigEvent`]s: FA/FB -> FrequencyChanged, MD -> ModeChanged, TX -> PttChanged,
+/// RT -> RitChanged, XT -> XitChanged.
+struct KenwoodAiHandler;
+
+impl riglib_text_io::io::AiHandler for KenwoodAiHandler {
+    fn process(&self, prefix: &str, data: &str, event_tx: &broadcast::Sender<RigEvent>) {
+        match prefix {
+            "FA" => match commands::parse_frequency_response(data) {
+                Ok(freq_hz) => {
+                    debug!(freq_hz, "AI frequency update (VFO A)");
+                    let _ = event_tx.send(RigEvent::FrequencyChanged {
+                        receiver: ReceiverId::VFO_A,
+                        freq_hz,
+                    });
+                }
+                Err(e) => {
+                    debug!(?e, "failed to parse AI frequency response (FA)");
+                }
+            },
+            "FB" => match commands::parse_frequency_response(data) {
+                Ok(freq_hz) => {
+                    debug!(freq_hz, "AI frequency update (VFO B)");
+                    let _ = event_tx.send(RigEvent::FrequencyChanged {
+                        receiver: ReceiverId::VFO_B,
+                        freq_hz,
+                    });
+                }
+                Err(e) => {
+                    debug!(?e, "failed to parse AI frequency response (FB)");
+                }
+            },
+            "MD" => match commands::parse_mode_response(data) {
+                Ok(mode) => {
+                    debug!(%mode, "AI mode update");
+                    let _ = event_tx.send(RigEvent::ModeChanged {
+                        receiver: ReceiverId::VFO_A,
+                        mode,
+                    });
+                }
+                Err(e) => {
+                    debug!(?e, "failed to parse AI mode response");
+                }
+            },
+            "TX" => match commands::parse_ptt_response(data) {
+                Ok(on) => {
+                    debug!(on, "AI PTT update");
+                    let _ = event_tx.send(RigEvent::PttChanged { on });
+                }
+                Err(e) => {
+                    debug!(?e, "failed to parse AI PTT response");
+                }
+            },
+            "RT" => match commands::parse_rit_response(data) {
+                Ok(enabled) => {
+                    debug!(enabled, "AI RIT update");
+                    let _ = event_tx.send(RigEvent::RitChanged {
+                        enabled,
+                        offset_hz: 0,
+                    });
+                }
+                Err(e) => {
+                    debug!(?e, "failed to parse AI RIT response");
+                }
+            },
+            "XT" => match commands::parse_xit_response(data) {
+                Ok(enabled) => {
+                    debug!(enabled, "AI XIT update");
+                    let _ = event_tx.send(RigEvent::XitChanged {
+                        enabled,
+                        offset_hz: 0,
+                    });
+                }
+                Err(e) => {
+                    debug!(?e, "failed to parse AI XIT response");
+                }
+            },
+            _ => {
+                debug!(prefix, data, "unknown AI prefix, ignoring");
+            }
+        }
+    }
+}
 
 /// A connected Kenwood transceiver controlled over CAT.
 ///
 /// Constructed via [`KenwoodBuilder`](crate::builder::KenwoodBuilder). All rig
 /// communication goes through the [`Transport`] provided at build time.
 pub struct KenwoodRig {
-    transport: Arc<Mutex<Box<dyn Transport>>>,
+    io: riglib_text_io::io::RigIo,
     model: KenwoodModel,
     event_tx: broadcast::Sender<RigEvent>,
-    auto_retry: bool,
-    max_retries: u32,
     command_timeout: Duration,
     info: RigInfo,
     ptt_method: PttMethod,
     key_line: KeyLine,
     set_command_mode: SetCommandMode,
-    /// Handle to the background AI transceive reader task, if active.
-    transceive_handle: Mutex<Option<TransceiveHandle>>,
     /// USB audio device name (e.g. "USB Audio CODEC"). When set, this rig
     /// supports audio streaming via the `AudioCapable` trait.
     #[cfg(feature = "audio")]
@@ -57,7 +140,7 @@ pub struct KenwoodRig {
     /// Active cpal audio backend, created on first `start_rx_audio()` or
     /// `start_tx_audio()` call.
     #[cfg(feature = "audio")]
-    audio_backend: Mutex<Option<riglib_transport::CpalAudioBackend>>,
+    audio_backend: tokio::sync::Mutex<Option<riglib_transport::CpalAudioBackend>>,
 }
 
 impl KenwoodRig {
@@ -65,6 +148,9 @@ impl KenwoodRig {
     ///
     /// This is called by [`KenwoodBuilder`](crate::builder::KenwoodBuilder);
     /// callers should use the builder API instead.
+    ///
+    /// Spawns the IO task immediately. The IO task owns the transport
+    /// exclusively and processes all command/response exchanges.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         transport: Box<dyn Transport>,
@@ -83,323 +169,57 @@ impl KenwoodRig {
             model_name: model.name.to_string(),
             model_id: model.model_id.to_string(),
         };
-        KenwoodRig {
-            transport: Arc::new(Mutex::new(transport)),
-            model,
-            event_tx,
+
+        let config = riglib_text_io::io::IoConfig {
+            ai_enabled: false,
+            command_timeout,
             auto_retry,
             max_retries,
+            set_drain_timeout: Duration::from_millis(50),
+            digit_suffix_prefixes: &[],
+            ai_prefixes: &["FA", "FB", "MD", "TX", "RT", "XT"],
+            shutdown_command: Some(b"AI0;"),
+        };
+
+        let io = riglib_text_io::io::spawn_io_task(
+            transport,
+            config,
+            event_tx.clone(),
+            Box::new(KenwoodAiHandler),
+        );
+
+        KenwoodRig {
+            io,
+            model,
+            event_tx,
             command_timeout,
             info,
             ptt_method,
             key_line,
             set_command_mode,
-            transceive_handle: Mutex::new(None),
             #[cfg(feature = "audio")]
             audio_device_name,
             #[cfg(feature = "audio")]
-            audio_backend: Mutex::new(None),
+            audio_backend: tokio::sync::Mutex::new(None),
         }
-    }
-
-    /// Enable Kenwood AI (Auto Information) mode.
-    ///
-    /// Moves the transport from the `Arc<Mutex<>>` into a background reader
-    /// task that listens for unsolicited AI responses (frequency, mode, PTT,
-    /// RIT/XIT changes) and emits them as events. Commands are forwarded to
-    /// the reader task via an `mpsc` channel.
-    ///
-    /// This should be called once after construction, before issuing
-    /// commands, when AI mode (`AI2;`) is desired.
-    pub async fn enable_ai_mode(&self) {
-        let mut handle_guard = self.transceive_handle.lock().await;
-        if handle_guard.is_some() {
-            debug!("AI transceive already enabled");
-            return;
-        }
-
-        // Take the real transport out and replace with a sentinel.
-        let real_transport = {
-            let mut transport_guard = self.transport.lock().await;
-            std::mem::replace(
-                &mut *transport_guard,
-                Box::new(transceive::DisconnectedTransport) as Box<dyn Transport>,
-            )
-        };
-
-        let handle = transceive::spawn_reader_task(
-            real_transport,
-            self.event_tx.clone(),
-            self.auto_retry,
-            self.max_retries,
-            self.command_timeout,
-        );
-
-        debug!("Kenwood AI transceive mode enabled");
-        *handle_guard = Some(handle);
     }
 
     /// Send a CAT command and wait for the rig's response.
     ///
-    /// Dispatches to either the transceive channel path (if AI mode is
-    /// enabled) or the direct transport path.
+    /// Dispatches via the IO task's background channel.
     ///
     /// Returns the decoded prefix and data on success.
     async fn execute_command(&self, cmd: &[u8]) -> Result<(String, String)> {
-        // Check if AI transceive mode is active. Lock briefly to clone the sender.
-        let maybe_sender = {
-            let guard = self.transceive_handle.lock().await;
-            guard.as_ref().map(|h| h.cmd_tx.clone())
-        };
-
-        if let Some(cmd_tx) = maybe_sender {
-            self.execute_command_via_channel(cmd, cmd_tx).await
-        } else {
-            self.execute_command_direct(cmd).await
-        }
+        self.io.command(cmd.to_vec(), self.command_timeout).await
     }
 
-    /// Execute a command by sending it through the AI transceive reader task.
-    async fn execute_command_via_channel(
-        &self,
-        cmd: &[u8],
-        cmd_tx: tokio::sync::mpsc::Sender<CommandRequest>,
-    ) -> Result<(String, String)> {
-        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-
-        let request = CommandRequest::CatCommand {
-            cmd_bytes: cmd.to_vec(),
-            response_tx,
-        };
-
-        cmd_tx
-            .send(request)
-            .await
-            .map_err(|_| Error::NotConnected)?;
-
-        match tokio::time::timeout(
-            self.command_timeout + Duration::from_millis(500),
-            response_rx,
-        )
-        .await
-        {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(Error::NotConnected), // oneshot sender dropped
-            Err(_) => Err(Error::Timeout),          // overall timeout
-        }
-    }
-
-    /// Set a serial control line (DTR or RTS) via the transport.
+    /// Send a SET command via the IO task.
     ///
-    /// If AI transceive mode is active, the request is forwarded through the
-    /// command channel to the reader task which owns the transport.
-    async fn set_serial_line(&self, dtr: bool, on: bool) -> Result<()> {
-        let maybe_sender = {
-            let guard = self.transceive_handle.lock().await;
-            guard.as_ref().map(|h| h.cmd_tx.clone())
-        };
-
-        if let Some(cmd_tx) = maybe_sender {
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            let request = if dtr {
-                CommandRequest::SetDtr { on, response_tx }
-            } else {
-                CommandRequest::SetRts { on, response_tx }
-            };
-            cmd_tx
-                .send(request)
-                .await
-                .map_err(|_| Error::NotConnected)?;
-            match tokio::time::timeout(Duration::from_millis(500), response_rx).await {
-                Ok(Ok(result)) => result,
-                Ok(Err(_)) => Err(Error::NotConnected),
-                Err(_) => Err(Error::Timeout),
-            }
-        } else {
-            let mut transport = self.transport.lock().await;
-            if dtr {
-                transport.set_dtr(on).await
-            } else {
-                transport.set_rts(on).await
-            }
-        }
-    }
-
-    /// Send a CAT command directly on the transport (non-AI mode).
-    ///
-    /// Reads bytes from the transport until a semicolon terminator is found,
-    /// then decodes the response. Handles:
-    /// - Timeout with configurable retry count
-    /// - Error responses (`?;`)
-    ///
-    /// Returns the decoded prefix and data on success.
-    async fn execute_command_direct(&self, cmd: &[u8]) -> Result<(String, String)> {
-        let retries = if self.auto_retry { self.max_retries } else { 0 };
-        let mut transport = self.transport.lock().await;
-
-        for attempt in 0..=retries {
-            if attempt > 0 {
-                debug!(attempt, "Kenwood CAT command retry");
-                tokio::time::sleep(Duration::from_millis(20 * attempt as u64)).await;
-            }
-
-            transport.send(cmd).await?;
-
-            let mut buf = [0u8; 256];
-            let mut response_buf = Vec::new();
-
-            loop {
-                match transport.receive(&mut buf, self.command_timeout).await {
-                    Ok(n) => {
-                        response_buf.extend_from_slice(&buf[..n]);
-
-                        // Attempt to decode a response from accumulated data.
-                        match protocol::decode_response(&response_buf) {
-                            DecodeResult::Response {
-                                prefix,
-                                data,
-                                consumed,
-                            } => {
-                                response_buf.drain(..consumed);
-                                return Ok((prefix, data));
-                            }
-                            DecodeResult::Error(consumed) => {
-                                response_buf.drain(..consumed);
-                                return Err(Error::Protocol(
-                                    "rig returned error response (?;)".into(),
-                                ));
-                            }
-                            DecodeResult::Incomplete => {
-                                // Need more data, continue reading.
-                            }
-                        }
-                    }
-                    Err(Error::Timeout) => {
-                        // Transport timed out. Try to decode what we have.
-                        if !response_buf.is_empty() {
-                            match protocol::decode_response(&response_buf) {
-                                DecodeResult::Response { prefix, data, .. } => {
-                                    return Ok((prefix, data));
-                                }
-                                DecodeResult::Error(_) => {
-                                    return Err(Error::Protocol(
-                                        "rig returned error response (?;)".into(),
-                                    ));
-                                }
-                                DecodeResult::Incomplete => {}
-                            }
-                        }
-                        break; // Move to next retry attempt.
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-        }
-
-        Err(Error::Timeout)
-    }
-
-    /// Send a SET command (fire-and-forget).
-    ///
-    /// In **NoVerify** mode: sends the command, then does a brief 50ms drain
-    /// to catch echo bytes and `?;` errors without adding significant latency.
-    /// Timeout during drain is treated as success (the radio sent nothing back).
-    ///
-    /// In **Verify** mode: sends the command with no drain. The caller is
-    /// expected to issue a follow-up GET to confirm the value took effect.
+    /// The IO task handles the 50ms drain to catch `?;` errors.
     async fn execute_set_command(&self, cmd: &[u8]) -> Result<()> {
-        let maybe_sender = {
-            let guard = self.transceive_handle.lock().await;
-            guard.as_ref().map(|h| h.cmd_tx.clone())
-        };
-
-        if let Some(cmd_tx) = maybe_sender {
-            self.execute_set_command_via_channel(cmd, cmd_tx).await
-        } else {
-            self.execute_set_command_direct(cmd).await
-        }
-    }
-
-    /// Send a SET command directly on the transport (non-AI mode).
-    async fn execute_set_command_direct(&self, cmd: &[u8]) -> Result<()> {
-        let mut transport = self.transport.lock().await;
-        transport.send(cmd).await?;
-
-        if self.set_command_mode == SetCommandMode::NoVerify {
-            let drain_timeout = Duration::from_millis(50);
-            let mut buf = [0u8; 256];
-            let mut drain_buf = Vec::new();
-
-            loop {
-                match transport.receive(&mut buf, drain_timeout).await {
-                    Ok(n) => {
-                        drain_buf.extend_from_slice(&buf[..n]);
-                        match protocol::decode_response(&drain_buf) {
-                            DecodeResult::Error(_) => {
-                                return Err(Error::Protocol(
-                                    "rig returned error response (?;)".into(),
-                                ));
-                            }
-                            DecodeResult::Response { .. } => break,
-                            DecodeResult::Incomplete => {}
-                        }
-                    }
-                    Err(Error::Timeout) => {
-                        if !drain_buf.is_empty() {
-                            if let DecodeResult::Error(_) = protocol::decode_response(&drain_buf) {
-                                return Err(Error::Protocol(
-                                    "rig returned error response (?;)".into(),
-                                ));
-                            }
-                        }
-                        break;
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Send a SET command through the AI transceive channel.
-    async fn execute_set_command_via_channel(
-        &self,
-        cmd: &[u8],
-        cmd_tx: tokio::sync::mpsc::Sender<CommandRequest>,
-    ) -> Result<()> {
-        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-
-        let request = CommandRequest::CatCommand {
-            cmd_bytes: cmd.to_vec(),
-            response_tx,
-        };
-
-        cmd_tx
-            .send(request)
+        self.io
+            .set_command(cmd.to_vec(), self.command_timeout)
             .await
-            .map_err(|_| Error::NotConnected)?;
-
-        match tokio::time::timeout(
-            Duration::from_millis(if self.set_command_mode == SetCommandMode::NoVerify {
-                100
-            } else {
-                50
-            }),
-            response_rx,
-        )
-        .await
-        {
-            Ok(Ok(Ok(_))) => Ok(()),
-            Ok(Ok(Err(e))) => {
-                if matches!(e, Error::Protocol(_)) {
-                    Err(e)
-                } else {
-                    Ok(())
-                }
-            }
-            Ok(Err(_)) => Err(Error::NotConnected),
-            Err(_) => Ok(()),
-        }
     }
 
     /// Convert a raw Kenwood S-meter value (0-30 typical) to dBm.
@@ -581,15 +401,17 @@ impl Rig for KenwoodRig {
             PttMethod::Cat => {
                 let cmd = commands::cmd_set_ptt(on);
                 debug!(on, "setting PTT via CAT");
-                self.execute_set_command(&cmd).await?;
+                self.io
+                    .rt_set_command(cmd.to_vec(), self.command_timeout)
+                    .await?;
             }
             PttMethod::Dtr => {
                 debug!(on, "setting PTT via DTR");
-                self.set_serial_line(true, on).await?;
+                self.io.rt_set_line(true, on).await?;
             }
             PttMethod::Rts => {
                 debug!(on, "setting PTT via RTS");
-                self.set_serial_line(false, on).await?;
+                self.io.rt_set_line(false, on).await?;
             }
         }
         let _ = self.event_tx.send(RigEvent::PttChanged { on });
@@ -699,11 +521,11 @@ impl Rig for KenwoodRig {
             )),
             KeyLine::Dtr => {
                 debug!(on, "CW key via DTR");
-                self.set_serial_line(true, on).await
+                self.io.rt_set_line(true, on).await
             }
             KeyLine::Rts => {
                 debug!(on, "CW key via RTS");
-                self.set_serial_line(false, on).await
+                self.io.rt_set_line(false, on).await
             }
         }
     }
@@ -1123,27 +945,15 @@ impl Rig for KenwoodRig {
     }
 
     async fn enable_transceive(&self) -> Result<()> {
-        self.enable_ai_mode().await;
-        Ok(())
+        self.io
+            .set_command(b"AI2;".to_vec(), self.command_timeout)
+            .await
     }
 
     async fn disable_transceive(&self) -> Result<()> {
-        let handle = {
-            let mut guard = self.transceive_handle.lock().await;
-            guard.take()
-        };
-        let Some(handle) = handle else {
-            return Err(Error::Protocol("transceive not currently enabled".into()));
-        };
-
-        let transport = handle.shutdown().await?;
-
-        // Restore transport to direct mode.
-        let mut transport_guard = self.transport.lock().await;
-        *transport_guard = transport;
-
-        debug!("Kenwood AI transceive mode disabled");
-        Ok(())
+        self.io
+            .set_command(b"AI0;".to_vec(), self.command_timeout)
+            .await
     }
 
     fn subscribe(&self) -> Result<broadcast::Receiver<RigEvent>> {
@@ -2668,22 +2478,22 @@ mod tests {
             )
         }
 
-        #[test]
-        fn test_audio_supported_with_device() {
+        #[tokio::test]
+        async fn test_audio_supported_with_device() {
             let mock = MockTransport::new();
             let rig = make_audio_rig(mock, Some("USB Audio CODEC"));
             assert!(rig.audio_supported());
         }
 
-        #[test]
-        fn test_audio_not_supported_without_device() {
+        #[tokio::test]
+        async fn test_audio_not_supported_without_device() {
             let mock = MockTransport::new();
             let rig = make_audio_rig(mock, None);
             assert!(!rig.audio_supported());
         }
 
-        #[test]
-        fn test_native_audio_config() {
+        #[tokio::test]
+        async fn test_native_audio_config() {
             let mock = MockTransport::new();
             let rig = make_audio_rig(mock, Some("USB Audio CODEC"));
             let config = rig.native_audio_config();
