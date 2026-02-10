@@ -79,53 +79,59 @@ Flex is inherently event-driven. "AI off" means "suppress `RigEvent` emission to
 
 ---
 
-## Sub-Phase E.1 — Align FlexBuilder with Project Conventions
+## Sub-Phase E.1 — Align FlexBuilder with Project Conventions ✅ COMPLETE
 
-**Scope:** Builder pattern alignment. One session.
+**Scope:** Builder pattern alignment + SmartSdrClient stream abstraction. One session.
 
-- Ensure `FlexBuilder::build()` and `build_with_transport()` follow the same pattern as Icom.
-- `build_with_transport()` needs to accept mock TCP and UDP transports. May require:
+**What was built:**
+- Abstracted `SmartSdrClient` internals from `TcpStream` to generic `AsyncRead`/`AsyncWrite` trait objects (not the `Transport` trait — SmartSDR is line-oriented and needs `BufReader::read_line()`).
+- Added `SmartSdrClient::from_streams()` constructor accepting `Box<dyn AsyncBufRead>` + `Box<dyn AsyncWrite>`.
+- Refactored `connect_with_options()` to delegate to `from_streams()`.
+- Added `FlexTransports` struct and `build_with_transport()` to builder:
   ```rust
   pub struct FlexTransports {
-      pub tcp: Box<dyn Transport>,
-      pub udp: Box<dyn Transport>,
+      pub tcp_read: Box<dyn AsyncRead + Unpin + Send + 'static>,
+      pub tcp_write: Box<dyn AsyncWrite + Unpin + Send + 'static>,
   }
   ```
-- Builder spawns both TCP and UDP tasks.
-
-### Definition of Done
-
-- Builder construction with mocks compiles and returns a rig.
-- Follows same pattern as Icom/text-protocol backends.
+- 3 new tests using `tokio::io::duplex()`: basic construction, command/response, status event emission.
+- UDP handling deferred to E.3 (already optional via `start_udp_receiver()`).
+- 262 tests pass (259 original + 3 new).
 
 ---
 
-## Sub-Phase E.2 — Align Flex Event Emission with RigEvent
+## Sub-Phase E.2 — Align Flex Event Emission with RigEvent ✅ COMPLETE
 
-**Scope:** Event consistency. One session. Depends on E.1.
+**Status:** Already implemented prior to Phase E work.
 
-- Verify all Flex state changes that map to `RigEvent` variants are emitted consistently.
-- Slice frequency changes, mode changes, PTT changes should all map to correct `RigEvent` variants.
+All `RigEvent` variants are emitted by `process_status()` in `client.rs`:
+- `FrequencyChanged` — slice RF_frequency status updates
+- `ModeChanged` — slice mode status updates
+- `PttChanged` — tx state updates
+- `AgcChanged` — slice agc_mode status updates
+- `RitChanged` / `XitChanged` — slice rit_on/rit_freq/xit_on/xit_freq updates
+- `Connected` / `Disconnected` — connection lifecycle
 
-### Definition of Done
-
-- Mock TCP status messages produce correct `RigEvent` emission.
-- Event behavior matches other backends.
+Existing tests verify all of these (6+ tests in client.rs and rig.rs, plus the duplex-based `test_build_with_transport_status_event` from E.1).
 
 ---
 
-## Sub-Phase E.3 — Test Infrastructure for Flex
+## Sub-Phase E.3 — UDP Mock Injection for Flex Testing ✅ COMPLETE
 
-**Scope:** Test fixtures. One session. Depends on E.1.
+**Scope:** UDP test infrastructure. One session. Depends on E.1.
 
-- Create `MockSmartSdrServer` that simulates SmartSDR TCP protocol (handshake, status messages, command responses).
-- Create `MockVita49Source` that feeds scripted VITA-49 packets for meter testing.
-- These are Flex-specific test fixtures, not modifications to the generic MockTransport.
+E.1 established `tokio::io::duplex()` + helper functions as the TCP mock pattern, replacing the need for a formal `MockSmartSdrServer` struct. The remaining gap is **UDP mock injection** — the `test_start_rx_audio` test still binds a real `UdpSocket` and sends packets over localhost.
+
+- Add `start_mock_udp_receiver(mpsc::Receiver<Vec<u8>>)` to `SmartSdrClient` — accepts pre-built VITA-49 packets via a channel instead of binding a real UDP socket.
+- Migrate `test_start_rx_audio` to use the channel-based approach (no real socket).
+- Add meter data injection test using the same channel pattern.
+- Consider a `MockVita49Source` helper that builds valid VITA-49 meter/audio packets for test injection.
 
 ### Definition of Done
 
-- Mock server supports full connection lifecycle.
-- Meter data can be injected and verified.
+- Meter and DAX audio data can be injected via channel (no real UDP socket needed).
+- At least one test demonstrates channel-based meter injection.
+- Existing UDP tests still pass (real-socket path remains available).
 
 ---
 

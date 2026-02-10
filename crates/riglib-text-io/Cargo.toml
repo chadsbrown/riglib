@@ -1,0 +1,17 @@
+[package]
+name = "riglib-text-io"
+description = "Shared IO task for text-protocol rig backends (Kenwood, Elecraft, Yaesu)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+riglib-core.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+riglib-test-harness.workspace = true
+tokio = { workspace = true, features = ["full"] }

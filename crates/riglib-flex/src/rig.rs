@@ -1699,17 +1699,6 @@ mod tests {
     async fn test_start_rx_audio() {
         let (listener, addr) = mock_smartsdr_server().await;
 
-        // Bind a UDP socket for the "radio" to send DAX audio to the client.
-        // We need to know what port the client's UDP receiver is on.
-        // The client binds 0.0.0.0:4991 by default but in tests we use
-        // a random port. We will start the UDP receiver on a known port.
-        let udp_port: u16 = {
-            // Find a free port.
-            let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-            sock.local_addr().unwrap().port()
-            // sock is dropped, freeing the port for the client.
-        };
-
         let stream_handle: u32 = 0x2000_0001;
 
         let server = tokio::spawn({
@@ -1762,19 +1751,6 @@ mod tests {
                     inner.flush().await.unwrap();
                 }
 
-                // Now send a synthetic DAX audio VITA-49 packet via UDP.
-                tokio::time::sleep(Duration::from_millis(100)).await;
-
-                let known_samples: Vec<(f32, f32)> =
-                    vec![(0.25, -0.25), (0.5, -0.5), (0.75, -0.75), (1.0, -1.0)];
-                let packet = build_dax_audio_vita49_packet(stream_handle, &known_samples);
-
-                let udp_sender = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-                udp_sender
-                    .send_to(&packet, format!("127.0.0.1:{}", udp_port))
-                    .await
-                    .unwrap();
-
                 // Keep connection alive.
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
@@ -1782,8 +1758,9 @@ mod tests {
 
         let client = connect_client(&addr).await;
 
-        // Start the UDP receiver on our known port.
-        client.start_udp_receiver(udp_port).await.unwrap();
+        // Start a mock UDP receiver via channel instead of a real UdpSocket.
+        let (udp_tx, udp_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+        client.start_mock_udp_receiver(udp_rx).await;
 
         let rig = make_flex_radio(client);
 
@@ -1799,6 +1776,12 @@ mod tests {
         // Verify the config.
         assert_eq!(audio_rx.config().sample_rate, 24_000);
         assert_eq!(audio_rx.config().channels, 2);
+
+        // Inject a synthetic DAX audio VITA-49 packet via the mock channel.
+        let known_samples: Vec<(f32, f32)> =
+            vec![(0.25, -0.25), (0.5, -0.5), (0.75, -0.75), (1.0, -1.0)];
+        let packet = build_dax_audio_vita49_packet(stream_handle, &known_samples);
+        udp_tx.send(packet).await.unwrap();
 
         // Receive the audio buffer (with timeout to avoid hanging).
         let buf = tokio::time::timeout(Duration::from_secs(2), audio_rx.recv())
@@ -2004,6 +1987,126 @@ mod tests {
         rig.stop_cw_message().await.unwrap();
 
         rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    // -----------------------------------------------------------------------
+    // Meter injection via mock UDP channel
+    // -----------------------------------------------------------------------
+
+    /// Build a VITA-49 MeterData packet with the given meter readings.
+    ///
+    /// Each reading is a (meter_id, value) pair encoded as big-endian
+    /// u16 + i16 in the payload. Uses class code 0x8002.
+    fn build_meter_vita49_packet(readings: &[(u16, i16)]) -> Vec<u8> {
+        use crate::vita49::{FLEXRADIO_OUI, HEADER_SIZE};
+
+        let payload_len = readings.len() * 4;
+        let total_bytes = HEADER_SIZE + payload_len;
+        assert!(total_bytes % 4 == 0, "total packet must be word-aligned");
+        let size_words = (total_bytes / 4) as u16;
+
+        let mut buf = vec![0u8; total_bytes];
+
+        // Header word (offset 0-3, big-endian)
+        let packet_type: u32 = 0x3; // Extension Data with Stream ID
+        let class_id_present: u32 = 1;
+        let mut hw: u32 = 0;
+        hw |= (packet_type & 0x0F) << 28;
+        hw |= class_id_present << 27;
+        // TSI=01 (UTC), TSF=01 (sample count)
+        hw |= 0x01 << 20;
+        hw |= 0x01 << 18;
+        hw |= size_words as u32 & 0x0FFF;
+        buf[0..4].copy_from_slice(&hw.to_be_bytes());
+
+        // Stream ID (offset 4-7) -- arbitrary for meter data
+        buf[4..8].copy_from_slice(&0x0000_0001u32.to_be_bytes());
+
+        // Class OUI (offset 8-11): FlexRadio OUI << 8
+        let class_upper: u32 = FLEXRADIO_OUI << 8;
+        buf[8..12].copy_from_slice(&class_upper.to_be_bytes());
+
+        // Info class code (0x534C) + packet class code (0x8002 = MeterData)
+        let class_lower: u32 = (0x534C_u32 << 16) | 0x8002_u32;
+        buf[12..16].copy_from_slice(&class_lower.to_be_bytes());
+
+        // Integer timestamp (offset 16-19) -- zero for test
+        // Fractional timestamp (offset 20-27) -- zero for test
+        // (already zeroed)
+
+        // Payload: pairs of (u16 meter_id, i16 value), big-endian
+        let mut offset = HEADER_SIZE;
+        for &(meter_id, value) in readings {
+            buf[offset..offset + 2].copy_from_slice(&meter_id.to_be_bytes());
+            buf[offset + 2..offset + 4].copy_from_slice(&value.to_be_bytes());
+            offset += 4;
+        }
+
+        buf
+    }
+
+    #[tokio::test]
+    async fn test_meter_injection_via_channel() {
+        let (listener, addr) = mock_smartsdr_server().await;
+
+        let server = tokio::spawn(async move {
+            let mut stream = accept_and_handshake(&listener).await;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // Register meter ID 1 as "SLC0-S" via a TCP meter status message.
+            stream
+                .write_all(b"S12345678|meter 1 num=1 nam=SLC0-S\n")
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+
+            // Keep connection alive.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+
+        let client = connect_client(&addr).await;
+
+        // Start mock UDP receiver via channel.
+        let (udp_tx, udp_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+        client.start_mock_udp_receiver(udp_rx).await;
+
+        // Wait for the meter status message to be processed by the TCP read loop.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Verify the meter is registered but has no value yet.
+        assert!(
+            client.meter_value("SLC0-S").await.is_none(),
+            "meter should have no value before injection"
+        );
+
+        // Build and inject a VITA-49 meter packet with meter_id=1, value=-73.
+        let packet = build_meter_vita49_packet(&[(1, -73)]);
+        udp_tx.send(packet).await.unwrap();
+
+        // Give the background task time to process the packet.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Verify the meter value is now accessible.
+        let value = client
+            .meter_value("SLC0-S")
+            .await
+            .expect("meter value should be set after injection");
+        assert_eq!(value, -73, "expected meter value -73, got {}", value);
+
+        // Inject a second packet to verify updates work.
+        let packet2 = build_meter_vita49_packet(&[(1, 42)]);
+        udp_tx.send(packet2).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let value2 = client
+            .meter_value("SLC0-S")
+            .await
+            .expect("meter value should be updated");
+        assert_eq!(value2, 42, "expected updated meter value 42, got {}", value2);
+
+        client.disconnect().await.unwrap();
         server.abort();
     }
 }

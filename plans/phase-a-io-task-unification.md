@@ -6,7 +6,9 @@
 
 ---
 
-## Sub-Phase A.1 — Timeout Unification
+## Sub-Phase A.1 — Timeout Unification ✅
+
+**Status: COMPLETE** — Removed 11 double-timeout sites across 8 files (icom, yaesu, kenwood, elecraft rig.rs + transceive.rs). All 1,850+ workspace tests pass, clippy clean.
 
 **Scope:** Standalone cleanup, no structural change. Single session.
 
@@ -41,7 +43,9 @@ Some serial transport implementations on Linux (particularly FTDI USB-serial ada
 
 ---
 
-## Sub-Phase A.2 — IO Types (Request/Response/RigIo/IoConfig)
+## Sub-Phase A.2 — IO Types (Request/Response/RigIo/IoConfig) ✅
+
+**Status: COMPLETE** — Created `crates/riglib-icom/src/io.rs` with `IoConfig`, `Request`, `RigIo` types and convenience methods (`command`, `ack_command`, `set_line`, `shutdown`). Added `tokio-util` workspace dependency for `CancellationToken`. 9 unit tests pass, clippy clean.
 
 **Scope:** Type definitions only, no behavioral changes. Single session. Depends on A.1.
 
@@ -141,7 +145,9 @@ impl RigIo {
 
 ---
 
-## Sub-Phase A.3 — IO Task Loop Implementation
+## Sub-Phase A.3 — IO Task Loop Implementation ✅
+
+**Status: COMPLETE** — Added `spawn_io_task`, `io_loop`, `execute_civ_command`, `execute_civ_ack_command`, `process_idle_frames`, `drain_idle_frames` to `io.rs`. Made `is_transceive_frame`, `process_single_transceive_frame`, `process_transceive_frames` `pub(crate)` in `transceive.rs` for reuse. 12 new white-box tests pass (basic command, echo skip, ACK, NAK, collision with/without recovery, SetLine DTR/RTS, shutdown, interleaved transceive, drain_idle_frames). All 1,876 workspace tests pass, clippy clean.
 
 **Scope:** The core IO loop. This is the most complex sub-phase. One full session. Depends on A.2.
 
@@ -275,7 +281,9 @@ async fn io_loop(
 
 ---
 
-## Sub-Phase A.4 — Builder Wiring
+## Sub-Phase A.4 — Builder Wiring ✅
+
+**Status: COMPLETE** — Builder now spawns IO task unconditionally via `spawn_io_task()`. `IcomRig` struct replaced `Arc<Mutex<Transport>>` + `transceive_handle` with `RigIo`. Dispatch methods (`execute_command`, `execute_ack_command`, `set_serial_line`) are thin wrappers over `RigIo`. Deleted `execute_command_direct`, `execute_command_via_channel`, `start_transceive`. `enable/disable_transceive` are no-ops. All 62 rig.rs tests migrated to async `make_test_rig()` using builder. 3 direct `IcomRig::new()` test sites + audio test helper converted. All 1,876 workspace tests pass, clippy clean.
 
 **Scope:** Wire builder to always spawn IO task. Single session. Depends on A.3.
 
@@ -324,7 +332,9 @@ IO task owns the `broadcast::Sender<RigEvent>`. Rig clones the sender or holds i
 
 ---
 
-## Sub-Phase A.5 — Delete Direct Path
+## Sub-Phase A.5 — Delete Direct Path ✅
+
+**Status: COMPLETE** — Deleted `CommandRequest`, `TransceiveHandle`, `ReaderConfig`, `DisconnectedTransport`, `spawn_reader_task()`, `reader_loop()`, `execute_command_on_transport()` and unused imports from `transceive.rs` (813→501 lines). Updated module doc comment. Changed `pub mod transceive` to `pub(crate) mod transceive` in `lib.rs`. Updated `io.rs` doc comment. All 1,876 workspace tests pass, clippy clean (3 remaining warnings are A.6 scope).
 
 **Scope:** Remove `execute_command_direct()` and all direct-mode branching. Single session. Depends on A.4.
 
@@ -353,7 +363,9 @@ As long as direct mode exists, you have two different correctness surfaces (dire
 
 ---
 
-## Sub-Phase A.6 — Lifecycle Hygiene (CancellationToken + Drop)
+## Sub-Phase A.6 — Lifecycle Hygiene (CancellationToken + Drop) ✅
+
+**Status: COMPLETE** — Added `Drop` impl for `IcomRig` that cancels the CancellationToken (graceful) and aborts the JoinHandle (safety net). Added `#[allow(dead_code)]` on test-only `Shutdown` variant and `shutdown()` method. Added 2 tests: `drop_does_not_hang` and `drop_during_pending_command`. Cleaned up unused `IC7300_ADDR` constant. All 1,878 workspace tests pass, clippy clean (zero warnings).
 
 **Scope:** Clean shutdown. Single session. Depends on A.5 (or can parallel with A.5).
 

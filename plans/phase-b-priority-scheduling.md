@@ -12,9 +12,10 @@ At 35 WPM CW (typical for competitive CQWW or WPX CW), inter-character timing is
 
 ---
 
-## Sub-Phase B.1 — Split Command Channel into RT/BG
+## Sub-Phase B.1 — Split Command Channel into RT/BG  **[COMPLETE]**
 
 **Scope:** Channel plumbing only. Single session.
+**Status:** Complete — `RigIo` has `rt_tx`/`bg_tx`, IO loop has biased select (cancel > RT > BG > idle), `handle_request()` helper extracted, 1,878 workspace tests pass, zero warnings.
 
 ### Changes
 
@@ -47,9 +48,10 @@ The `biased` keyword ensures RT commands are always serviced before BG, even if 
 
 ---
 
-## Sub-Phase B.2 — Route Rig Methods to Correct Channel
+## Sub-Phase B.2 — Route Rig Methods to Correct Channel  **[COMPLETE]**
 
 **Scope:** Method-level routing. Single session. Depends on B.1.
+**Status:** Complete — RT methods added to `RigIo` (`rt_ack_command`, `rt_set_line`), RT helpers on `IcomRig` (`execute_rt_ack_command`, `set_serial_line_rt`), 7 call sites routed to RT (`set_ptt` 3 branches, `set_cw_key` 2 branches, `send_cw_message`, `stop_cw_message`), priority ordering test passes, 1,882 workspace tests pass, zero warnings.
 
 ### Routing Rules
 
@@ -95,9 +97,10 @@ Priority scheduling does not change shutdown requirements. The IO task lifecycle
 
 ---
 
-## Sub-Phase B.3 — Bounded Buffer + Resync
+## Sub-Phase B.3 — Bounded Buffer + Resync  **[COMPLETE]**
 
 **Scope:** Safety limits. Single session. Depends on B.1.
+**Status:** Complete — unified `MAX_BUF` (4096) guards both the idle buffer and the per-command response buffer in `execute_civ_command`. Overflow triggers warning, clear, and retry. Overflow resync test passes, 1,883 workspace tests pass, zero warnings.
 
 ### Implementation
 

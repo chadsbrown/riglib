@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, broadcast, oneshot};
 
@@ -66,7 +66,7 @@ impl Default for ClientOptions {
 /// interior mutability (`Arc<Mutex<...>>`).
 pub struct SmartSdrClient {
     /// Write half of the TCP stream, used for sending commands.
-    tcp_writer: Arc<Mutex<Option<tokio::io::WriteHalf<TcpStream>>>>,
+    tcp_writer: Arc<Mutex<Option<Box<dyn AsyncWrite + Unpin + Send>>>>,
 
     /// Next sequence number for commands (starts at 1).
     next_seq: Arc<Mutex<u32>>,
@@ -133,10 +133,32 @@ impl SmartSdrClient {
         let _ = stream.set_nodelay(true);
 
         let (read_half, write_half) = tokio::io::split(stream);
-        let mut reader = BufReader::new(read_half);
+        let reader = Box::new(BufReader::new(read_half))
+            as Box<dyn AsyncBufRead + Unpin + Send + 'static>;
+        let writer = Box::new(write_half) as Box<dyn AsyncWrite + Unpin + Send + 'static>;
+
+        let client = Self::from_streams(reader, writer, options).await?;
+
+        tracing::debug!(addr = %addr, "FlexRadio client connected");
+        Ok(client)
+    }
+
+    /// Build a client from pre-connected async streams.
+    ///
+    /// Performs the SmartSDR handshake (reads version and handle lines), starts
+    /// the background TCP read loop, and optionally sends subscription commands.
+    ///
+    /// This is the primary entry point for testing with mock transports -- pass
+    /// any `AsyncBufRead`/`AsyncWrite` pair (e.g. from `tokio::io::duplex()`).
+    pub async fn from_streams(
+        reader: Box<dyn AsyncBufRead + Unpin + Send + 'static>,
+        writer: Box<dyn AsyncWrite + Unpin + Send + 'static>,
+        options: ClientOptions,
+    ) -> Result<Self> {
+        let mut reader = reader;
 
         // -- Handshake: read version line --
-        let version_line = read_handshake_line(&mut reader).await?;
+        let version_line = read_handshake_line(&mut *reader).await?;
         let version_msg = codec::parse_message(&version_line)?;
         let version = match version_msg {
             SmartSdrMessage::Version(v) => v,
@@ -156,7 +178,7 @@ impl SmartSdrClient {
         );
 
         // -- Handshake: read handle line --
-        let handle_line = read_handshake_line(&mut reader).await?;
+        let handle_line = read_handshake_line(&mut *reader).await?;
         let handle_msg = codec::parse_message(&handle_line)?;
         let handle = match handle_msg {
             SmartSdrMessage::Handle(h) => h,
@@ -197,7 +219,7 @@ impl SmartSdrClient {
         let dax_streams = Arc::new(Mutex::new(HashMap::new()));
 
         let client = SmartSdrClient {
-            tcp_writer: Arc::new(Mutex::new(Some(write_half))),
+            tcp_writer: Arc::new(Mutex::new(Some(writer))),
             next_seq: Arc::new(Mutex::new(1)),
             pending,
             handle: Arc::new(Mutex::new(Some(handle))),
@@ -225,7 +247,6 @@ impl SmartSdrClient {
         // Emit Connected event.
         let _ = client.event_tx.send(RigEvent::Connected);
 
-        tracing::debug!(addr = %addr, "FlexRadio client connected");
         Ok(client)
     }
 
@@ -464,6 +485,37 @@ impl SmartSdrClient {
         );
     }
 
+    /// Start a mock VITA-49 receiver that reads packets from an mpsc channel.
+    ///
+    /// This is the test-only counterpart to [`start_udp_receiver()`]. Instead
+    /// of binding a real UDP socket, it spawns a background task that reads
+    /// `Vec<u8>` datagram payloads from the provided channel and processes
+    /// them through the same VITA-49 parsing and state-update logic.
+    ///
+    /// # Usage
+    ///
+    /// ```ignore
+    /// let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+    /// client.start_mock_udp_receiver(rx).await;
+    /// tx.send(vita49_packet_bytes).await.unwrap();
+    /// ```
+    pub async fn start_mock_udp_receiver(
+        &self,
+        mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    ) {
+        let state = Arc::clone(&self.state);
+        let dax_streams = Arc::clone(&self.dax_streams);
+
+        let handle = tokio::spawn(async move {
+            while let Some(data) = rx.recv().await {
+                process_vita49_packet(&data, &state, &dax_streams).await;
+            }
+        });
+
+        let mut udp_handle = self.udp_read_handle.lock().await;
+        *udp_handle = Some(handle);
+    }
+
     /// Unregister a DAX audio stream.
     ///
     /// After unregistration, incoming VITA-49 packets for this stream_id
@@ -485,7 +537,7 @@ impl SmartSdrClient {
 
 /// Read a single line from the TCP stream during the handshake phase.
 async fn read_handshake_line(
-    reader: &mut BufReader<tokio::io::ReadHalf<TcpStream>>,
+    reader: &mut (dyn AsyncBufRead + Unpin + Send),
 ) -> Result<String> {
     let mut line = String::new();
     let result = tokio::time::timeout(HANDSHAKE_TIMEOUT, reader.read_line(&mut line)).await;
@@ -507,7 +559,7 @@ async fn read_handshake_line(
 
 /// Background task that reads lines from the TCP stream and dispatches them.
 async fn tcp_read_loop(
-    mut reader: BufReader<tokio::io::ReadHalf<TcpStream>>,
+    mut reader: Box<dyn AsyncBufRead + Unpin + Send>,
     pending: Arc<Mutex<HashMap<u32, oneshot::Sender<SmartSdrResponse>>>>,
     state: Arc<Mutex<RadioState>>,
     event_tx: broadcast::Sender<RigEvent>,
@@ -739,6 +791,63 @@ async fn process_status(
 // UDP read loop
 // ---------------------------------------------------------------------------
 
+/// Process a single VITA-49 packet, updating meter state and routing DAX audio.
+///
+/// This is the shared processing logic used by both `udp_read_loop()` (real
+/// socket) and `start_mock_udp_receiver()` (channel-based injection for tests).
+async fn process_vita49_packet(
+    data: &[u8],
+    state: &Arc<Mutex<RadioState>>,
+    dax_streams: &Arc<Mutex<HashMap<u32, tokio::sync::mpsc::Sender<AudioBuffer>>>>,
+) {
+    use crate::dax::DAX_SAMPLE_RATE;
+
+    if let Ok(packet) = vita49::parse_packet(data) {
+        match packet.header.stream_type {
+            vita49::StreamType::MeterData => {
+                if let Ok(readings) = vita49::parse_meter_payload(packet.payload) {
+                    let mut s = state.lock().await;
+                    for reading in readings {
+                        s.meter_values.insert(reading.meter_id, reading.value);
+                    }
+                }
+            }
+            vita49::StreamType::DaxAudio => {
+                let stream_id = packet.header.stream_id;
+                let streams = dax_streams.lock().await;
+                if let Some(tx) = streams.get(&stream_id) {
+                    if let Ok(audio_samples) = vita49::parse_dax_audio_payload(packet.payload) {
+                        // Convert Vec<AudioSample> to interleaved f32 Vec.
+                        let mut samples = Vec::with_capacity(audio_samples.len() * 2);
+                        for s in &audio_samples {
+                            samples.push(s.left);
+                            samples.push(s.right);
+                        }
+
+                        let buffer = AudioBuffer::new(
+                            samples,
+                            2, // stereo
+                            DAX_SAMPLE_RATE,
+                        );
+
+                        // Use try_send to avoid blocking the read loop.
+                        // If the consumer is too slow, drop the buffer.
+                        if tx.try_send(buffer).is_err() {
+                            tracing::trace!(
+                                stream_id = format!("0x{:08X}", stream_id),
+                                "DAX audio buffer dropped (consumer too slow)"
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Other stream types are not handled yet.
+            }
+        }
+    }
+}
+
 /// Background task that receives VITA-49 UDP datagrams and updates state.
 async fn udp_read_loop(
     socket: tokio::net::UdpSocket,
@@ -746,59 +855,12 @@ async fn udp_read_loop(
     _event_tx: broadcast::Sender<RigEvent>,
     dax_streams: Arc<Mutex<HashMap<u32, tokio::sync::mpsc::Sender<AudioBuffer>>>>,
 ) {
-    use crate::dax::DAX_SAMPLE_RATE;
-
     let mut buf = [0u8; 8192];
 
     loop {
         match socket.recv(&mut buf).await {
             Ok(n) => {
-                if let Ok(packet) = vita49::parse_packet(&buf[..n]) {
-                    match packet.header.stream_type {
-                        vita49::StreamType::MeterData => {
-                            if let Ok(readings) = vita49::parse_meter_payload(packet.payload) {
-                                let mut s = state.lock().await;
-                                for reading in readings {
-                                    s.meter_values.insert(reading.meter_id, reading.value);
-                                }
-                            }
-                        }
-                        vita49::StreamType::DaxAudio => {
-                            let stream_id = packet.header.stream_id;
-                            let streams = dax_streams.lock().await;
-                            if let Some(tx) = streams.get(&stream_id) {
-                                if let Ok(audio_samples) =
-                                    vita49::parse_dax_audio_payload(packet.payload)
-                                {
-                                    // Convert Vec<AudioSample> to interleaved f32 Vec.
-                                    let mut samples = Vec::with_capacity(audio_samples.len() * 2);
-                                    for s in &audio_samples {
-                                        samples.push(s.left);
-                                        samples.push(s.right);
-                                    }
-
-                                    let buffer = AudioBuffer::new(
-                                        samples,
-                                        2, // stereo
-                                        DAX_SAMPLE_RATE,
-                                    );
-
-                                    // Use try_send to avoid blocking the UDP loop.
-                                    // If the consumer is too slow, drop the buffer.
-                                    if tx.try_send(buffer).is_err() {
-                                        tracing::trace!(
-                                            stream_id = format!("0x{:08X}", stream_id),
-                                            "DAX audio buffer dropped (consumer too slow)"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        _ => {
-                            // Other stream types are not handled yet.
-                        }
-                    }
-                }
+                process_vita49_packet(&buf[..n], &state, &dax_streams).await;
             }
             Err(e) => {
                 tracing::trace!(error = %e, "UDP recv error");

@@ -24,10 +24,14 @@
 
 use std::time::Duration;
 
+use tokio::sync::broadcast;
+
 use riglib_core::error::{Error, Result};
+use riglib_core::events::RigEvent;
 use riglib_core::transport::Transport;
 use riglib_core::types::{KeyLine, PttMethod};
 
+use crate::io::{IoConfig, spawn_io_task};
 use crate::models::IcomModel;
 use crate::rig::IcomRig;
 
@@ -192,14 +196,26 @@ impl IcomBuilder {
         }
 
         let civ_address = self.civ_address.unwrap_or(self.model.default_civ_address);
+        let (event_tx, _) = broadcast::channel::<RigEvent>(256);
+
+        let io = spawn_io_task(
+            transport,
+            IoConfig {
+                civ_address,
+                ai_enabled: false,
+                command_timeout: self.command_timeout,
+                auto_retry: self.auto_retry,
+                max_retries: self.max_retries,
+                collision_recovery: self.collision_recovery,
+            },
+            event_tx.clone(),
+        );
 
         Ok(IcomRig::new(
-            transport,
+            io,
             self.model,
             civ_address,
-            self.auto_retry,
-            self.max_retries,
-            self.collision_recovery,
+            event_tx,
             self.command_timeout,
             self.ptt_method,
             self.key_line,

@@ -19,13 +19,13 @@
 | [A](phase-a-io-task-unification.md) | Universal IO task, remove direct path | Icom | A.1-A.6 | ~6 | — |
 | [B](phase-b-priority-scheduling.md) | RT/BG priority scheduling | Icom | B.1-B.3 | ~3 | A |
 | [C](phase-c-read-coalescing.md) | In-flight read coalescing (if needed) | Icom | C.1-C.2 | ~2 | B |
-| [D](phase-d-text-protocol-migration.md) | Apply IO-task pattern to text-protocol rigs | Yaesu, Kenwood, Elecraft | D.1-D.4 | ~4-5 | A |
+| [D](phase-d-text-protocol-migration.md) | Apply IO-task pattern to text-protocol rigs | Yaesu, Kenwood, Elecraft | D.1a-D.4 | ~5-6 | A, B |
 | [E](phase-e-flex-alignment.md) | Align Flex with new conventions | Flex | E.1-E.3 | ~3 | A |
 | [F](phase-f-so2r-transactions.md) | Atomic command sequences for SO2R | All | F.1-F.3 | ~3-4 | B, hardware validation |
 
 Orthogonal: [Error Model](error-model.md) (Err.1-Err.3, ~3 sessions) — can start after Phase A.3, should not block the IO-task migration.
 
-**Total estimated effort: ~22-26 sessions**
+**Total estimated effort: ~23-27 sessions**
 
 ## Dependency Graph
 
@@ -46,22 +46,33 @@ A.3 (IO task loop)                     Err.1 (Define error types)
   |       v
   |     A.6 (Lifecycle / Drop)
   |
-  +--- After A.5 is stable: --------------------------------+
-       |                          |                          |
-       v                          v                          v
-  B.1 (Split channels)     D.1 (Generic text IO)      E.1 (Flex builder)
-       |                          |                          |
-       v                          v                          v
-  B.2 (Route methods)      D.2 (Kenwood)              E.2 (Flex events)
-       |                          |                          |
-       v                          v                          v
-  B.3 (Bounded buffers)    D.3 (Elecraft)              E.3 (Flex test infra)
+  +--- After A.5 is stable: --------+
        |                          |
        v                          v
-  C.1 (Coalesce key)       D.4 (Yaesu)
-       |                     [ONLY if profiling
-       v                      shows need]
-  C.2 (Fan-out)
+  B.1 (Split channels)     E.1 (Flex builder)
+       |                          |
+       v                          v
+  B.2 (Route methods)      E.2 (Flex events)
+       |                          |
+       v                          v
+  B.3 (Bounded buffers)    E.3 (Flex test infra)
+       |
+       +--- After B.3: D carries forward RT/BG pattern ---+
+       |                                                   |
+       v                                                   v
+  D.1a (Text IO task core)                         C.1 (Coalesce key)
+       |                                             [ONLY if profiling
+       v                                              shows need]
+  D.1b (Text IO tests + edge cases)                C.2 (Fan-out)
+       |
+       v
+  D.2 (Kenwood)
+       |
+       v
+  D.3 (Elecraft)
+       |
+       v
+  D.4 (Yaesu)
        |
        +--- After B.2 + hardware validation:
             |

@@ -1,22 +1,17 @@
-//! CI-V transceive listener for unsolicited rig broadcasts.
+//! CI-V transceive frame processing for unsolicited rig broadcasts.
 //!
 //! When CI-V Transceive is enabled on an Icom radio, the rig broadcasts
 //! frequency and mode changes to all CI-V bus participants without being
-//! asked. This module provides a background reader task that captures
-//! those broadcasts and emits them as [`RigEvent`]s.
+//! asked. This module provides helpers that parse those broadcasts and
+//! emit them as [`RigEvent`]s.
 //!
-//! The background task also multiplexes command/response traffic: commands
-//! are sent via an `mpsc` channel and responses returned via `oneshot`.
+//! The IO task ([`crate::io`]) calls into these helpers for both idle-read
+//! processing and interleaved transceive frame handling during commands.
 
-use std::time::Duration;
-
-use tokio::sync::{broadcast, mpsc, oneshot};
-use tokio::task::JoinHandle;
+use tokio::sync::broadcast;
 use tracing::debug;
 
-use riglib_core::error::{Error, Result};
 use riglib_core::events::RigEvent;
-use riglib_core::transport::Transport;
 use riglib_core::types::*;
 
 use crate::civ::{self, CONTROLLER_ADDR, CivFrame, DecodeResult};
@@ -39,95 +34,6 @@ const CMD_TRANSCEIVE_MODE: u8 = 0x01;
 const CMD_TRANSCEIVE_RIT_XIT: u8 = 0x21;
 
 // ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/// A request sent from the rig to the reader task.
-pub(crate) enum CommandRequest {
-    /// A CI-V command to be forwarded to the transport.
-    CivCommand {
-        cmd_bytes: Vec<u8>,
-        response_tx: oneshot::Sender<Result<CivFrame>>,
-    },
-    /// Set the DTR serial line state.
-    SetDtr {
-        on: bool,
-        response_tx: oneshot::Sender<Result<()>>,
-    },
-    /// Set the RTS serial line state.
-    SetRts {
-        on: bool,
-        response_tx: oneshot::Sender<Result<()>>,
-    },
-    /// Shut down the reader loop and return transport ownership.
-    Shutdown {
-        transport_tx: oneshot::Sender<Box<dyn Transport>>,
-    },
-}
-
-/// Handle to the background transceive reader task.
-pub(crate) struct TransceiveHandle {
-    pub cmd_tx: mpsc::Sender<CommandRequest>,
-    /// Kept so the task can be joined on shutdown or aborted when the rig is dropped.
-    pub task_handle: JoinHandle<()>,
-}
-
-impl TransceiveHandle {
-    /// Shut down the background reader task and recover the transport.
-    ///
-    /// Sends a `Shutdown` request to the reader loop, waits for the transport
-    /// to be returned via a oneshot channel, then joins the task.
-    pub(crate) async fn shutdown(self) -> Result<Box<dyn Transport>> {
-        let (transport_tx, transport_rx) = oneshot::channel();
-        // Don't care if send fails -- reader might have already exited.
-        let _ = self
-            .cmd_tx
-            .send(CommandRequest::Shutdown { transport_tx })
-            .await;
-        let transport = transport_rx.await.map_err(|_| Error::NotConnected)?;
-        // Wait for the task to finish.
-        let _ = self.task_handle.await;
-        Ok(transport)
-    }
-}
-
-/// Configuration for the reader task's retry/timeout behavior.
-struct ReaderConfig {
-    civ_address: u8,
-    auto_retry: bool,
-    max_retries: u32,
-    collision_recovery: bool,
-    command_timeout: Duration,
-}
-
-// ---------------------------------------------------------------------------
-// DisconnectedTransport sentinel
-// ---------------------------------------------------------------------------
-
-/// Sentinel transport placed into the `Arc<Mutex<>>` after the real
-/// transport has been moved to the background reader task.
-pub(crate) struct DisconnectedTransport;
-
-#[async_trait::async_trait]
-impl Transport for DisconnectedTransport {
-    async fn send(&mut self, _data: &[u8]) -> Result<()> {
-        Err(Error::NotConnected)
-    }
-
-    async fn receive(&mut self, _buf: &mut [u8], _timeout: Duration) -> Result<usize> {
-        Err(Error::NotConnected)
-    }
-
-    async fn close(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    fn is_connected(&self) -> bool {
-        false
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
@@ -146,248 +52,11 @@ pub(crate) fn reassemble_payload(frame: &CivFrame) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// Spawn
-// ---------------------------------------------------------------------------
-
-/// Spawn the background reader task.
-///
-/// The task owns the transport exclusively. Commands are sent via the
-/// returned `TransceiveHandle.cmd_tx` channel; unsolicited transceive
-/// frames are parsed and emitted to `event_tx`.
-pub(crate) fn spawn_reader_task(
-    transport: Box<dyn Transport>,
-    civ_address: u8,
-    event_tx: broadcast::Sender<RigEvent>,
-    auto_retry: bool,
-    max_retries: u32,
-    collision_recovery: bool,
-    command_timeout: Duration,
-) -> TransceiveHandle {
-    let (cmd_tx, cmd_rx) = mpsc::channel::<CommandRequest>(16);
-
-    let config = ReaderConfig {
-        civ_address,
-        auto_retry,
-        max_retries,
-        collision_recovery,
-        command_timeout,
-    };
-
-    let task_handle = tokio::spawn(reader_loop(transport, config, event_tx, cmd_rx));
-
-    TransceiveHandle {
-        cmd_tx,
-        task_handle,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Reader loop
-// ---------------------------------------------------------------------------
-
-/// The main loop of the background reader task.
-///
-/// Uses `tokio::select! { biased; }` to prioritize command handling over
-/// idle transceive frame reading.
-async fn reader_loop(
-    mut transport: Box<dyn Transport>,
-    config: ReaderConfig,
-    event_tx: broadcast::Sender<RigEvent>,
-    mut cmd_rx: mpsc::Receiver<CommandRequest>,
-) {
-    let mut idle_buf = Vec::new();
-
-    loop {
-        tokio::select! {
-            biased;
-
-            // Priority: handle outgoing commands.
-            cmd = cmd_rx.recv() => {
-                match cmd {
-                    Some(CommandRequest::CivCommand { cmd_bytes, response_tx }) => {
-                        let result = execute_command_on_transport(
-                            &mut *transport,
-                            &cmd_bytes,
-                            &config,
-                            &event_tx,
-                        )
-                        .await;
-                        let _ = response_tx.send(result);
-                    }
-                    Some(CommandRequest::SetDtr { on, response_tx }) => {
-                        let result = transport.set_dtr(on).await;
-                        let _ = response_tx.send(result);
-                    }
-                    Some(CommandRequest::SetRts { on, response_tx }) => {
-                        let result = transport.set_rts(on).await;
-                        let _ = response_tx.send(result);
-                    }
-                    Some(CommandRequest::Shutdown { transport_tx }) => {
-                        // CI-V transceive is a rig menu setting, no off command to send.
-                        debug!("shutdown requested, returning transport");
-                        let _ = transport_tx.send(transport);
-                        break;
-                    }
-                    None => {
-                        // All senders dropped -- IcomRig was dropped.
-                        debug!("transceive command channel closed, exiting reader loop");
-                        break;
-                    }
-                }
-            }
-
-            // Idle: read transceive frames from the bus.
-            _ = async {
-                let mut buf = [0u8; 256];
-                match transport.receive(&mut buf, Duration::from_millis(100)).await {
-                    Ok(n) if n > 0 => {
-                        idle_buf.extend_from_slice(&buf[..n]);
-                        process_transceive_frames(&mut idle_buf, config.civ_address, &event_tx);
-                    }
-                    _ => {
-                        // Timeout or error -- just loop back.
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    }
-                }
-            } => {}
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Command execution (inside the reader task)
-// ---------------------------------------------------------------------------
-
-/// Execute a CI-V command on the transport, handling echo, collision,
-/// retry, and interleaved transceive frames.
-///
-/// This is the transceive-aware equivalent of `IcomRig::execute_command`.
-async fn execute_command_on_transport(
-    transport: &mut dyn Transport,
-    cmd: &[u8],
-    config: &ReaderConfig,
-    event_tx: &broadcast::Sender<RigEvent>,
-) -> Result<CivFrame> {
-    let retries = if config.auto_retry {
-        config.max_retries
-    } else {
-        0
-    };
-    let civ_address = config.civ_address;
-
-    for attempt in 0..=retries {
-        if attempt > 0 {
-            debug!(attempt, "CI-V command retry (transceive mode)");
-            tokio::time::sleep(Duration::from_millis(20 * attempt as u64)).await;
-        }
-
-        transport.send(cmd).await?;
-
-        let mut buf = [0u8; 256];
-        let mut response_buf = Vec::new();
-
-        loop {
-            match tokio::time::timeout(
-                config.command_timeout,
-                transport.receive(&mut buf, config.command_timeout),
-            )
-            .await
-            {
-                Ok(Ok(n)) => {
-                    response_buf.extend_from_slice(&buf[..n]);
-
-                    loop {
-                        match civ::decode_frame(&response_buf) {
-                            DecodeResult::Frame(frame, consumed) => {
-                                response_buf.drain(..consumed);
-
-                                // Skip echo of our own command.
-                                if frame.dst_addr == civ_address
-                                    && frame.src_addr == CONTROLLER_ADDR
-                                {
-                                    debug!("skipping CI-V echo frame (transceive mode)");
-                                    continue;
-                                }
-
-                                // Actual response from the rig to us.
-                                if frame.dst_addr == CONTROLLER_ADDR
-                                    && frame.src_addr == civ_address
-                                {
-                                    if frame.is_nak() {
-                                        return Err(Error::Protocol("rig returned NAK".into()));
-                                    }
-                                    return Ok(frame);
-                                }
-
-                                // Interleaved transceive broadcast -- emit as event.
-                                if is_transceive_frame(&frame, civ_address) {
-                                    process_single_transceive_frame(&frame, civ_address, event_tx);
-                                    continue;
-                                }
-
-                                debug!(
-                                    dst = frame.dst_addr,
-                                    src = frame.src_addr,
-                                    "skipping CI-V frame from unexpected address (transceive mode)"
-                                );
-                            }
-                            DecodeResult::Incomplete => break,
-                            DecodeResult::Collision(consumed) => {
-                                response_buf.drain(..consumed);
-                                if config.collision_recovery {
-                                    debug!("CI-V collision detected (transceive mode), will retry");
-                                    break;
-                                }
-                                return Err(Error::Protocol("CI-V bus collision".into()));
-                            }
-                        }
-                    }
-
-                    if response_buf.contains(&civ::COLLISION) {
-                        break;
-                    }
-                }
-                Ok(Err(Error::Timeout)) => {
-                    if !response_buf.is_empty() {
-                        if let DecodeResult::Frame(frame, _) = civ::decode_frame(&response_buf) {
-                            if frame.dst_addr == CONTROLLER_ADDR
-                                && frame.src_addr == civ_address
-                                && !frame.is_nak()
-                            {
-                                return Ok(frame);
-                            }
-                        }
-                    }
-                    break;
-                }
-                Ok(Err(e)) => return Err(e),
-                Err(_) => {
-                    // tokio::time::timeout expired.
-                    if !response_buf.is_empty() {
-                        if let DecodeResult::Frame(frame, _) = civ::decode_frame(&response_buf) {
-                            if frame.dst_addr == CONTROLLER_ADDR
-                                && frame.src_addr == civ_address
-                                && !frame.is_nak()
-                            {
-                                return Ok(frame);
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    Err(Error::Timeout)
-}
-
-// ---------------------------------------------------------------------------
 // Transceive frame processing
 // ---------------------------------------------------------------------------
 
 /// Returns true if the frame looks like a transceive broadcast from the rig.
-fn is_transceive_frame(frame: &CivFrame, civ_address: u8) -> bool {
+pub(crate) fn is_transceive_frame(frame: &CivFrame, civ_address: u8) -> bool {
     // Transceive frames are sent from the rig to either the broadcast
     // address (0x00) or to the controller address.
     frame.src_addr == civ_address
@@ -399,7 +68,7 @@ fn is_transceive_frame(frame: &CivFrame, civ_address: u8) -> bool {
 
 /// Process all complete transceive frames in a buffer, emitting events
 /// for each. Incomplete data is left in the buffer for next time.
-fn process_transceive_frames(
+pub(crate) fn process_transceive_frames(
     buf: &mut Vec<u8>,
     civ_address: u8,
     event_tx: &broadcast::Sender<RigEvent>,
@@ -429,7 +98,7 @@ fn process_transceive_frames(
 }
 
 /// Process a single transceive frame and emit the appropriate event.
-fn process_single_transceive_frame(
+pub(crate) fn process_single_transceive_frame(
     frame: &CivFrame,
     _civ_address: u8,
     event_tx: &broadcast::Sender<RigEvent>,

@@ -23,12 +23,30 @@
 
 use std::time::Duration;
 
+use tokio::io::{AsyncRead, AsyncWrite, BufReader};
+
 use riglib_core::error::{Error, Result};
 
 use crate::client::{ClientOptions, SmartSdrClient};
 use crate::discovery::DiscoveredRadio;
 use crate::models::{self, FlexRadioModel};
 use crate::rig::FlexRadio;
+
+/// Pre-connected async streams for constructing a [`FlexRadio`] without a
+/// real TCP connection.
+///
+/// This is the FlexRadio equivalent of `build_with_transport()` found in the
+/// serial-protocol backends. Pass any `AsyncRead`/`AsyncWrite` pair -- for
+/// example from [`tokio::io::duplex()`] in tests.
+///
+/// The builder wraps `tcp_read` in a `BufReader` automatically; callers
+/// should provide a raw (un-buffered) reader.
+pub struct FlexTransports {
+    /// Read half of the TCP-like stream (will be wrapped in `BufReader`).
+    pub tcp_read: Box<dyn AsyncRead + Unpin + Send + 'static>,
+    /// Write half of the TCP-like stream.
+    pub tcp_write: Box<dyn AsyncWrite + Unpin + Send + 'static>,
+}
 
 /// Default SmartSDR TCP command port.
 const DEFAULT_TCP_PORT: u16 = 4992;
@@ -175,6 +193,51 @@ impl FlexRadioBuilder {
     pub fn build_with_client(self, client: SmartSdrClient) -> FlexRadio {
         let model = self.model.unwrap_or_else(models::flex_6600);
         FlexRadio::new(client, model, self.auto_create_slices)
+    }
+
+    /// Build a [`FlexRadio`] from pre-connected async streams.
+    ///
+    /// This is the FlexRadio equivalent of `build_with_transport()` found in
+    /// the serial-protocol backends. It performs the SmartSDR handshake over
+    /// the provided streams and starts the background read loop.
+    ///
+    /// The `tcp_read` side of [`FlexTransports`] is automatically wrapped in
+    /// a `BufReader`; callers should provide a raw (un-buffered) reader.
+    ///
+    /// # Example (testing with `tokio::io::duplex`)
+    ///
+    /// ```no_run
+    /// use riglib_flex::builder::{FlexRadioBuilder, FlexTransports};
+    ///
+    /// # async fn example() -> riglib_core::Result<()> {
+    /// let (client_stream, _server_stream) = tokio::io::duplex(4096);
+    /// let (read, write) = tokio::io::split(client_stream);
+    /// let transport = FlexTransports {
+    ///     tcp_read: Box::new(read),
+    ///     tcp_write: Box::new(write),
+    /// };
+    /// let rig = FlexRadioBuilder::new()
+    ///     .build_with_transport(transport)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn build_with_transport(self, transport: FlexTransports) -> Result<FlexRadio> {
+        let model = self.model.unwrap_or_else(models::flex_6600);
+
+        let options = ClientOptions {
+            client_name: self.client_name.clone(),
+            command_timeout: self.command_timeout,
+            auto_subscribe: true,
+        };
+
+        let reader = Box::new(BufReader::new(transport.tcp_read))
+            as Box<dyn tokio::io::AsyncBufRead + Unpin + Send + 'static>;
+        let writer = transport.tcp_write;
+
+        let client = SmartSdrClient::from_streams(reader, writer, options).await?;
+
+        Ok(FlexRadio::new(client, model, self.auto_create_slices))
     }
 }
 
@@ -395,5 +458,172 @@ mod tests {
         let builder = FlexRadioBuilder::default();
         assert_eq!(builder.tcp_port, 4992);
         assert_eq!(builder.client_name, "riglib");
+    }
+
+    // -----------------------------------------------------------------------
+    // build_with_transport() -- duplex stream tests
+    // -----------------------------------------------------------------------
+
+    use tokio::io::{AsyncBufReadExt, BufReader as TokioBufReader};
+
+    /// Helper: write the standard SmartSDR handshake lines to a writer.
+    async fn write_handshake(writer: &mut (impl AsyncWriteExt + Unpin)) {
+        writer.write_all(b"V1.4.0.0\n").await.unwrap();
+        writer.write_all(b"H12345678\n").await.unwrap();
+        writer.flush().await.unwrap();
+    }
+
+    /// Helper: drain fire-and-forget subscription commands from the server
+    /// side of a duplex stream. The client sends 4 no-wait commands after
+    /// the handshake when auto_subscribe is true: client program, sub slice,
+    /// sub meter, sub tx.
+    async fn drain_subscriptions(
+        reader: &mut (impl AsyncBufReadExt + Unpin),
+    ) {
+        for _ in 0..4 {
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_with_transport_duplex() {
+        let (client_stream, server_stream) = tokio::io::duplex(4096);
+        let (server_read, mut server_write) = tokio::io::split(server_stream);
+        let (client_read, client_write) = tokio::io::split(client_stream);
+
+        let server = tokio::spawn(async move {
+            write_handshake(&mut server_write).await;
+            // Keep the connection alive while the client connects.
+            let mut server_reader = TokioBufReader::new(server_read);
+            drain_subscriptions(&mut server_reader).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let transport = FlexTransports {
+            tcp_read: Box::new(client_read),
+            tcp_write: Box::new(client_write),
+        };
+
+        let rig = FlexRadioBuilder::new()
+            .model(flex_6600())
+            .auto_create_slices(false)
+            .build_with_transport(transport)
+            .await
+            .unwrap();
+
+        // Verify the rig was created and is connected.
+        assert!(rig.is_connected());
+        assert_eq!(rig.info().model_name, "FLEX-6600");
+        assert_eq!(rig.info().manufacturer, Manufacturer::FlexRadio);
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_build_with_transport_command() {
+        let (client_stream, server_stream) = tokio::io::duplex(4096);
+        let (server_read, mut server_write) = tokio::io::split(server_stream);
+        let (client_read, client_write) = tokio::io::split(client_stream);
+
+        let server = tokio::spawn(async move {
+            write_handshake(&mut server_write).await;
+
+            let mut server_reader = TokioBufReader::new(server_read);
+            drain_subscriptions(&mut server_reader).await;
+
+            // Now read the actual test command from the client.
+            let mut line = String::new();
+            server_reader.read_line(&mut line).await.unwrap();
+            let trimmed = line.trim();
+            // Extract the sequence number: "C<seq>|info"
+            let seq_str = &trimmed[1..trimmed.find('|').unwrap()];
+            let resp = format!("R{}|00000000|test_response_data\n", seq_str);
+            server_write.write_all(resp.as_bytes()).await.unwrap();
+            server_write.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let transport = FlexTransports {
+            tcp_read: Box::new(client_read),
+            tcp_write: Box::new(client_write),
+        };
+
+        let rig = FlexRadioBuilder::new()
+            .model(flex_6600())
+            .auto_create_slices(false)
+            .build_with_transport(transport)
+            .await
+            .unwrap();
+
+        // Send a command through the FlexRadio's underlying client and verify
+        // the mock server's response is returned correctly.
+        let result = rig.client.send_command("info").await.unwrap();
+        assert_eq!(result, "test_response_data");
+
+        rig.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_build_with_transport_status_event() {
+        let (client_stream, server_stream) = tokio::io::duplex(4096);
+        let (server_read, mut server_write) = tokio::io::split(server_stream);
+        let (client_read, client_write) = tokio::io::split(client_stream);
+
+        let server = tokio::spawn(async move {
+            write_handshake(&mut server_write).await;
+
+            let mut server_reader = TokioBufReader::new(server_read);
+            drain_subscriptions(&mut server_reader).await;
+
+            // Send a slice status update from the "radio".
+            server_write
+                .write_all(
+                    b"S12345678|slice 0 RF_frequency=14.250000 mode=USB filter_lo=100 filter_hi=2900\n",
+                )
+                .await
+                .unwrap();
+            server_write.flush().await.unwrap();
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        let transport = FlexTransports {
+            tcp_read: Box::new(client_read),
+            tcp_write: Box::new(client_write),
+        };
+
+        let rig = FlexRadioBuilder::new()
+            .model(flex_6600())
+            .auto_create_slices(false)
+            .build_with_transport(transport)
+            .await
+            .unwrap();
+
+        let mut rx = rig.subscribe().unwrap();
+
+        // Wait for the status message to be processed by the read loop.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        // Verify the state was updated from the status message.
+        let freq = rig.get_frequency(riglib_core::ReceiverId::from_index(0)).await.unwrap();
+        assert_eq!(freq, 14_250_000);
+
+        // Verify a FrequencyChanged event was emitted.
+        let mut found_freq_change = false;
+        while let Ok(event) = rx.try_recv() {
+            if let riglib_core::events::RigEvent::FrequencyChanged { receiver, freq_hz } = event {
+                assert_eq!(receiver, riglib_core::ReceiverId::from_index(0));
+                assert_eq!(freq_hz, 14_250_000);
+                found_freq_change = true;
+            }
+        }
+        assert!(found_freq_change, "expected FrequencyChanged event");
+
+        rig.disconnect().await.unwrap();
+        server.abort();
     }
 }
