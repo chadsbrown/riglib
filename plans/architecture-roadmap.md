@@ -23,9 +23,9 @@
 | [E](phase-e-flex-alignment.md) | Align Flex with new conventions | Flex | E.1-E.3 | ~3 | A | **COMPLETE** |
 | [F](phase-f-so2r-transactions.md) | Atomic command sequences for SO2R | All | F.1-F.3 | ~3-4 | B, hardware validation | Not started |
 
-Orthogonal: [Error Model](error-model.md) (Err.1-Err.3, ~3 sessions) — can start after Phase A.3, should not block the IO-task migration.
+Orthogonal: [Error Model](error-model.md) (Err.1-Err.4, ~5 sessions) — replaces stringly-typed `Protocol(String)` / `Transport(String)` with typed enums across all backends.
 
-**Total estimated effort: ~23-27 sessions**
+**Total estimated effort: ~25-29 sessions**
 
 ## Dependency Graph
 
@@ -36,14 +36,14 @@ A.1 (Timeout Unification)
 A.2 (IO types + Request/Response)
   |
   v
-A.3 (IO task loop)                     Err.1 (Define error types)
+A.3 (IO task loop)                     Err.1 (Define types + core/transport)
   |                                       |
-  +---> A.4 (Builder wiring)              v
-  |       |                             Err.2 (Icom errors)
-  |       v                               |
-  |     A.5 (Delete direct path)          v
-  |       |                             Err.3 (Text errors)
-  |       v
+  +---> A.4 (Builder wiring)              +---> Err.2 (Icom errors)
+  |       |                               +---> Err.3a (Text-IO + Kenwood)
+  |       v                               |       |
+  |     A.5 (Delete direct path)          |       v
+  |       |                               |     Err.3b (Elecraft + Yaesu)
+  |       v                               +---> Err.4 (FlexRadio errors)
   |     A.6 (Lifecycle / Drop)
   |
   +--- After A.5 is stable: --------+
