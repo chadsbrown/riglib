@@ -18,17 +18,18 @@
 
 | Crate                | Status      | Tests | Notes                              |
 |---------------------|-------------|-------|-------------------------------------|
-| riglib              | Complete    | 2     | Facade crate, feature flags + audio, 5 examples |
-| riglib-core         | Complete    | 38    | Types, errors, Transport, Rig, AudioCapable |
-| riglib-transport    | Complete    | 41    | Serial + TCP + UDP + CpalAudioBackend (audio feature) |
-| riglib-icom         | Complete    | 171   | CI-V codec, 14 models, IcomRig + AudioCapable |
-| riglib-yaesu        | Complete    | 194   | CAT protocol, 6 models, YaesuRig + AudioCapable |
-| riglib-elecraft     | Complete    | 244   | Extended Kenwood, 5 models, ElecraftRig + AudioCapable |
-| riglib-kenwood      | Complete    | 202   | Kenwood CAT, 4 models, KenwoodRig + AudioCapable |
-| riglib-flex         | Complete    | 204   | SmartSDR + VITA-49 + DAX audio, FlexRadio + AudioCapable |
-| riglib-test-harness | Complete    | 9     | MockTransport + MockTcpServer       |
+| riglib              | Complete    | 4     | Facade crate, feature flags + audio, 5 examples |
+| riglib-core         | Complete    | 68    | Types, errors, Transport, Rig, AudioCapable |
+| riglib-transport    | Complete    | 35    | Serial + TCP + UDP + CpalAudioBackend (audio feature) |
+| riglib-icom         | Complete    | 326   | CI-V codec, IO task, 14 models, IcomRig + AudioCapable |
+| riglib-yaesu        | Complete    | 321   | CAT protocol, IO task, 6 models, YaesuRig + AudioCapable |
+| riglib-elecraft     | Complete    | 400   | Extended Kenwood, IO task, 5 models, ElecraftRig + AudioCapable |
+| riglib-kenwood      | Complete    | 365   | Kenwood CAT, IO task, 4 models, KenwoodRig + AudioCapable |
+| riglib-flex         | Complete    | 267   | SmartSDR + VITA-49 + DAX audio, FlexRadio + AudioCapable |
+| riglib-text-io      | Complete    | 69    | Shared IO task for text-protocol backends (Kenwood, Elecraft, Yaesu) |
+| riglib-test-harness | Complete    | 11    | MockTransport + MockTcpServer       |
 
-**Total tests**: 1139 passing, 0 failures (with audio features enabled)
+**Total tests**: 1907 passing, 0 failures (with audio features enabled)
 
 ### Quality Gates
 
@@ -1065,6 +1066,7 @@ riglib/
 │   ├── riglib-elecraft/             # Elecraft Extended Kenwood
 │   ├── riglib-kenwood/              # Kenwood CAT
 │   ├── riglib-flex/                 # FlexRadio SmartSDR
+│   ├── riglib-text-io/              # Shared IO task for text-protocol backends
 │   └── riglib-test-harness/         # test utilities
 │
 ├── test-app/                    # CLI test application (evolves per phase)

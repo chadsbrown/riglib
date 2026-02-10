@@ -14,14 +14,14 @@
 
 ## Phase Summary
 
-| Phase | Description | Backend | Sub-phases | Sessions | Depends On |
-|-------|-------------|---------|------------|----------|------------|
-| [A](phase-a-io-task-unification.md) | Universal IO task, remove direct path | Icom | A.1-A.6 | ~6 | — |
-| [B](phase-b-priority-scheduling.md) | RT/BG priority scheduling | Icom | B.1-B.3 | ~3 | A |
-| [C](phase-c-read-coalescing.md) | In-flight read coalescing (if needed) | Icom | C.1-C.2 | ~2 | B |
-| [D](phase-d-text-protocol-migration.md) | Apply IO-task pattern to text-protocol rigs | Yaesu, Kenwood, Elecraft | D.1a-D.4 | ~5-6 | A, B |
-| [E](phase-e-flex-alignment.md) | Align Flex with new conventions | Flex | E.1-E.3 | ~3 | A |
-| [F](phase-f-so2r-transactions.md) | Atomic command sequences for SO2R | All | F.1-F.3 | ~3-4 | B, hardware validation |
+| Phase | Description | Backend | Sub-phases | Sessions | Depends On | Status |
+|-------|-------------|---------|------------|----------|------------|--------|
+| [A](phase-a-io-task-unification.md) | Universal IO task, remove direct path | Icom | A.1-A.6 | ~6 | — | **COMPLETE** |
+| [B](phase-b-priority-scheduling.md) | RT/BG priority scheduling | Icom | B.1-B.3 | ~3 | A | **COMPLETE** |
+| [C](phase-c-read-coalescing.md) | In-flight read coalescing (if needed) | Icom | C.1-C.2 | ~2 | B | Deferred (not yet needed) |
+| [D](phase-d-text-protocol-migration.md) | Apply IO-task pattern to text-protocol rigs | Yaesu, Kenwood, Elecraft | D.1a-D.4 | ~5-6 | A, B | **COMPLETE** |
+| [E](phase-e-flex-alignment.md) | Align Flex with new conventions | Flex | E.1-E.3 | ~3 | A | **COMPLETE** |
+| [F](phase-f-so2r-transactions.md) | Atomic command sequences for SO2R | All | F.1-F.3 | ~3-4 | B, hardware validation | Not started |
 
 Orthogonal: [Error Model](error-model.md) (Err.1-Err.3, ~3 sessions) — can start after Phase A.3, should not block the IO-task migration.
 
