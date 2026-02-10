@@ -1232,4 +1232,651 @@ mod tests {
         drain_idle_frames(&mut buf, &config);
         assert_eq!(buf, b"MD");
     }
+
+    // =======================================================================
+    // Yaesu helpers
+    // =======================================================================
+
+    /// Config for Yaesu-style tests with digit suffix prefixes.
+    fn yaesu_test_config() -> IoConfig {
+        IoConfig {
+            ai_enabled: false,
+            command_timeout: Duration::from_millis(500),
+            auto_retry: false,
+            max_retries: 0,
+            set_drain_timeout: Duration::from_millis(50),
+            digit_suffix_prefixes: &["MD", "RM", "SM", "SH", "NA", "AN", "PA", "RA"],
+            ai_prefixes: &["FA", "FB", "MD0", "MD1", "TX", "RT0", "XT0"],
+            shutdown_command: None,
+        }
+    }
+
+    /// AI handler for Yaesu tests — handles "FA" (frequency) and "MD0" (mode).
+    struct YaesuTestAiHandler;
+
+    impl AiHandler for YaesuTestAiHandler {
+        fn process(&self, prefix: &str, data: &str, event_tx: &broadcast::Sender<RigEvent>) {
+            match prefix {
+                "FA" => {
+                    if let Ok(freq_hz) = data.parse::<u64>() {
+                        let _ = event_tx.send(RigEvent::FrequencyChanged {
+                            receiver: ReceiverId::VFO_A,
+                            freq_hz,
+                        });
+                    }
+                }
+                "MD0" => {
+                    // Emit ModeChanged for digit-suffix mode command.
+                    // Use a simple mapping for test purposes.
+                    let _ = event_tx.send(RigEvent::ModeChanged {
+                        receiver: ReceiverId::VFO_A,
+                        mode: riglib_core::types::Mode::USB,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // =======================================================================
+    // D.1b — Yaesu-style digit suffix prefix tests
+    // =======================================================================
+
+    #[tokio::test]
+    async fn io_task_yaesu_cat_command_digit_suffix() {
+        let mut mock = MockTransport::new();
+        // Yaesu MD0 query: send "MD0;", mock returns "MD03;" (mode=3).
+        mock.expect(b"MD0;", b"MD03;");
+
+        let (event_tx, _) = broadcast::channel(16);
+        let io = spawn_io_task(
+            Box::new(mock),
+            yaesu_test_config(),
+            event_tx,
+            Box::new(NullAiHandler),
+        );
+
+        let result = io.command(b"MD0;".to_vec(), Duration::from_millis(500)).await;
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+        let (prefix, data) = result.unwrap();
+        assert_eq!(prefix, "MD0");
+        assert_eq!(data, "3");
+
+        let _ = io.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn io_task_yaesu_cat_command_non_dsp_prefix() {
+        let mut mock = MockTransport::new();
+        // FA is NOT in digit_suffix_prefixes, so the digit is data.
+        mock.expect(b"FA;", b"FA014250000;");
+
+        let (event_tx, _) = broadcast::channel(16);
+        let io = spawn_io_task(
+            Box::new(mock),
+            yaesu_test_config(),
+            event_tx,
+            Box::new(NullAiHandler),
+        );
+
+        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+        let (prefix, data) = result.unwrap();
+        assert_eq!(prefix, "FA");
+        assert_eq!(data, "014250000");
+
+        let _ = io.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn io_task_yaesu_interleaved_ai_with_digit_suffix() {
+        let mut mock = MockTransport::new();
+        // Send FA query, mock returns MD03; (AI frame) then FA014250000; (actual response).
+        mock.expect(b"FA;", b"MD03;FA014250000;");
+
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let config = IoConfig {
+            ai_enabled: true,
+            ..yaesu_test_config()
+        };
+        let io = spawn_io_task(
+            Box::new(mock),
+            config,
+            event_tx,
+            Box::new(YaesuTestAiHandler),
+        );
+
+        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+        let (prefix, data) = result.unwrap();
+        assert_eq!(prefix, "FA");
+        assert_eq!(data, "014250000");
+
+        // Verify the interleaved MD0 AI frame was processed.
+        let event = event_rx.try_recv().unwrap();
+        assert!(
+            matches!(event, RigEvent::ModeChanged { .. }),
+            "expected ModeChanged, got {event:?}"
+        );
+
+        let _ = io.shutdown().await;
+    }
+
+    // =======================================================================
+    // D.1b — Auto-retry tests
+    // =======================================================================
+
+    #[tokio::test]
+    async fn io_task_cat_command_auto_retry_succeeds() {
+        let mut mock = MockTransport::new();
+        // First attempt: empty response (timeout).
+        mock.expect(b"FA;", b"");
+        // Second attempt: valid response.
+        mock.expect(b"FA;", b"FA00014074000;");
+
+        let (event_tx, _) = broadcast::channel(16);
+        let config = IoConfig {
+            auto_retry: true,
+            max_retries: 2,
+            ..test_config()
+        };
+        let io = spawn_io_task(
+            Box::new(mock),
+            config,
+            event_tx,
+            Box::new(NullAiHandler),
+        );
+
+        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        assert!(result.is_ok(), "expected success after retry, got {result:?}");
+        let (prefix, data) = result.unwrap();
+        assert_eq!(prefix, "FA");
+        assert_eq!(data, "00014074000");
+
+        let _ = io.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn io_task_cat_command_auto_retry_exhausted() {
+        let mut mock = MockTransport::new();
+        // Both attempts: empty response (timeout).
+        mock.expect(b"FA;", b"");
+        mock.expect(b"FA;", b"");
+
+        let (event_tx, _) = broadcast::channel(16);
+        let config = IoConfig {
+            auto_retry: true,
+            max_retries: 1,
+            ..test_config()
+        };
+        let io = spawn_io_task(
+            Box::new(mock),
+            config,
+            event_tx,
+            Box::new(NullAiHandler),
+        );
+
+        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), Error::Timeout),
+            "expected Timeout after exhausted retries"
+        );
+
+        let _ = io.shutdown().await;
+    }
+
+    // =======================================================================
+    // D.1b — Timeout with no retry
+    // =======================================================================
+
+    #[tokio::test]
+    async fn io_task_cat_command_timeout_no_retry() {
+        let mut mock = MockTransport::new();
+        // Empty response triggers immediate Timeout on receive.
+        mock.expect(b"FA;", b"");
+
+        let (event_tx, _) = broadcast::channel(16);
+        let config = IoConfig {
+            auto_retry: false,
+            max_retries: 0,
+            ..test_config()
+        };
+        let io = spawn_io_task(
+            Box::new(mock),
+            config,
+            event_tx,
+            Box::new(NullAiHandler),
+        );
+
+        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), Error::Timeout),
+            "expected Timeout without retry"
+        );
+
+        let _ = io.shutdown().await;
+    }
+
+    // =======================================================================
+    // D.1b — Multiple sequential commands
+    // =======================================================================
+
+    #[tokio::test]
+    async fn io_task_sequential_commands() {
+        let mut mock = MockTransport::new();
+        mock.expect(b"FA;", b"FA00014074000;");
+        mock.expect(b"MD;", b"MD3;");
+        mock.expect(b"TX;", b"TX0;");
+
+        let (event_tx, _) = broadcast::channel(16);
+        let io = spawn_io_task(
+            Box::new(mock),
+            test_config(),
+            event_tx,
+            Box::new(NullAiHandler),
+        );
+
+        // Command 1: FA query.
+        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        assert!(result.is_ok());
+        let (prefix, data) = result.unwrap();
+        assert_eq!(prefix, "FA");
+        assert_eq!(data, "00014074000");
+
+        // Command 2: MD query.
+        let result = io.command(b"MD;".to_vec(), Duration::from_millis(500)).await;
+        assert!(result.is_ok());
+        let (prefix, data) = result.unwrap();
+        assert_eq!(prefix, "MD");
+        assert_eq!(data, "3");
+
+        // Command 3: TX query.
+        let result = io.command(b"TX;".to_vec(), Duration::from_millis(500)).await;
+        assert!(result.is_ok());
+        let (prefix, data) = result.unwrap();
+        assert_eq!(prefix, "TX");
+        assert_eq!(data, "0");
+
+        let _ = io.shutdown().await;
+    }
+
+    // =======================================================================
+    // D.1b — Cancel token lifecycle
+    // =======================================================================
+
+    #[tokio::test]
+    async fn io_task_cancel_stops_loop() {
+        let mock = MockTransport::new();
+        let (event_tx, _) = broadcast::channel(16);
+        let io = spawn_io_task(
+            Box::new(mock),
+            test_config(),
+            event_tx,
+            Box::new(NullAiHandler),
+        );
+
+        // Cancel immediately — no commands sent.
+        io.cancel.cancel();
+
+        // The task should complete without panic.
+        let result = io.task.await;
+        assert!(result.is_ok(), "IO task panicked after cancel");
+    }
+
+    #[tokio::test]
+    async fn io_task_cancel_during_idle() {
+        let mock = MockTransport::new();
+        let (event_tx, _) = broadcast::channel(16);
+        let io = spawn_io_task(
+            Box::new(mock),
+            test_config(),
+            event_tx,
+            Box::new(NullAiHandler),
+        );
+
+        // Let the IO loop run idle for a brief period.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Cancel and verify clean exit.
+        io.cancel.cancel();
+        let result = io.task.await;
+        assert!(result.is_ok(), "IO task panicked during idle cancel");
+    }
+
+    // =======================================================================
+    // D.1b — SetCommand AI frame during drain
+    // =======================================================================
+
+    #[tokio::test]
+    async fn io_task_set_command_ai_frame_during_drain() {
+        let mut mock = MockTransport::new();
+        // SET command: during drain, an AI frame arrives instead of ?;.
+        mock.expect(b"FA00014074000;", b"FA00014074000;");
+
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let config = IoConfig {
+            ai_enabled: true,
+            ..test_config()
+        };
+        let io = spawn_io_task(
+            Box::new(mock),
+            config,
+            event_tx,
+            Box::new(TestAiHandler),
+        );
+
+        let result = io
+            .set_command(b"FA00014074000;".to_vec(), Duration::from_millis(500))
+            .await;
+        assert!(result.is_ok(), "SET should succeed even with AI frame during drain");
+
+        // Verify the AI frame was processed as an event.
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::FrequencyChanged { freq_hz, .. } => {
+                assert_eq!(freq_hz, 14_074_000);
+            }
+            other => panic!("expected FrequencyChanged, got {other:?}"),
+        }
+
+        let _ = io.shutdown().await;
+    }
+
+    // =======================================================================
+    // D.1b — RT SetCommand catches error
+    // =======================================================================
+
+    #[tokio::test]
+    async fn io_task_rt_set_command_catches_error() {
+        let mut mock = MockTransport::new();
+        mock.expect(b"FA99999999999;", b"?;");
+
+        let (event_tx, _) = broadcast::channel(16);
+        let io = spawn_io_task(
+            Box::new(mock),
+            test_config(),
+            event_tx,
+            Box::new(NullAiHandler),
+        );
+
+        let result = io
+            .rt_set_command(b"FA99999999999;".to_vec(), Duration::from_millis(500))
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::Protocol(_)));
+
+        let _ = io.shutdown().await;
+    }
+
+    // =======================================================================
+    // D.1b — Yaesu AI burst (no overflow)
+    // =======================================================================
+
+    #[test]
+    fn io_task_yaesu_ai_burst_no_overflow() {
+        let config = IoConfig {
+            ai_enabled: true,
+            ..yaesu_test_config()
+        };
+        let handler = YaesuTestAiHandler;
+        let (event_tx, mut event_rx) = broadcast::channel(32);
+
+        // Build 10 concatenated FA frames with distinct frequencies.
+        let mut buf = Vec::new();
+        for i in 0..10u64 {
+            let freq = format!("FA{:09};", 14074000 + i * 1000);
+            buf.extend_from_slice(freq.as_bytes());
+        }
+
+        process_idle_frames(&mut buf, &config, &handler, &event_tx);
+
+        // All 10 should be emitted as events.
+        for i in 0..10u64 {
+            let event = event_rx
+                .try_recv()
+                .unwrap_or_else(|_| panic!("missing event {i}"));
+            match event {
+                RigEvent::FrequencyChanged { freq_hz, .. } => {
+                    assert_eq!(freq_hz, 14074000 + i * 1000);
+                }
+                other => panic!("expected FrequencyChanged for frame {i}, got {other:?}"),
+            }
+        }
+
+        // No more events.
+        assert!(event_rx.try_recv().is_err());
+
+        // Buffer should be fully consumed.
+        assert!(buf.is_empty());
+    }
+
+    // =======================================================================
+    // D.1b — Mixed error responses (error clears for next)
+    // =======================================================================
+
+    #[tokio::test]
+    async fn io_task_cat_command_error_clears_for_next() {
+        let mut mock = MockTransport::new();
+        // First command: error response.
+        mock.expect(b"XX;", b"?;");
+        // Second command: valid response.
+        mock.expect(b"FA;", b"FA00014074000;");
+
+        let (event_tx, _) = broadcast::channel(16);
+        let io = spawn_io_task(
+            Box::new(mock),
+            test_config(),
+            event_tx,
+            Box::new(NullAiHandler),
+        );
+
+        // First command should fail with Protocol error.
+        let result = io.command(b"XX;".to_vec(), Duration::from_millis(500)).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::Protocol(_)));
+
+        // Second command should succeed — error state does not leak.
+        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        assert!(result.is_ok(), "second command failed: {result:?}");
+        let (prefix, data) = result.unwrap();
+        assert_eq!(prefix, "FA");
+        assert_eq!(data, "00014074000");
+
+        let _ = io.shutdown().await;
+    }
+
+    // =======================================================================
+    // D.1b — RT SetLine RTS toggle
+    // =======================================================================
+
+    #[tokio::test]
+    async fn io_task_rt_set_line_rts() {
+        let mock = MockTransport::new();
+        let (event_tx, _) = broadcast::channel(16);
+        let io = spawn_io_task(
+            Box::new(mock),
+            test_config(),
+            event_tx,
+            Box::new(NullAiHandler),
+        );
+
+        // dtr=false means RTS line.
+        let result = io.rt_set_line(false, true).await;
+        assert!(result.is_ok());
+
+        let _ = io.shutdown().await;
+    }
+
+    // =======================================================================
+    // D.1b — Idle buffer overflow (process_idle_frames with large buffer)
+    // =======================================================================
+
+    #[test]
+    fn io_task_idle_buffer_overflow_resets() {
+        let config = IoConfig {
+            ai_enabled: true,
+            ..test_config()
+        };
+        let handler = TestAiHandler;
+        let (event_tx, mut event_rx) = broadcast::channel(1024);
+
+        // Build a large buffer with many valid frames (well beyond MAX_BUF).
+        // Each "FA00014074000;" is 15 bytes; 600 frames = 9000 bytes > 8192.
+        let mut buf = Vec::new();
+        for _ in 0..600 {
+            buf.extend_from_slice(b"FA00014074000;");
+        }
+        assert!(buf.len() > MAX_BUF);
+
+        // process_idle_frames processes until Incomplete — it should handle
+        // all frames without issue since it drains as it goes.
+        process_idle_frames(&mut buf, &config, &handler, &event_tx);
+
+        // All 600 frames should have been processed.
+        let mut count = 0;
+        while event_rx.try_recv().is_ok() {
+            count += 1;
+        }
+        assert_eq!(count, 600, "expected all 600 frames processed");
+
+        // Buffer should be fully consumed.
+        assert!(buf.is_empty());
+    }
+
+    // =======================================================================
+    // D.1b — process_idle_frames edge cases
+    // =======================================================================
+
+    #[test]
+    fn process_idle_frames_error_response_discarded() {
+        let config = IoConfig {
+            ai_enabled: true,
+            ..test_config()
+        };
+        let handler = NullAiHandler;
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+
+        let mut buf = b"?;".to_vec();
+        process_idle_frames(&mut buf, &config, &handler, &event_tx);
+
+        // Error response should be consumed without emitting an event.
+        assert!(buf.is_empty());
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn process_idle_frames_mixed_ai_and_non_ai() {
+        let config = IoConfig {
+            ai_enabled: true,
+            ..test_config()
+        };
+        let handler = TestAiHandler;
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+
+        // FA = AI prefix (handled by TestAiHandler),
+        // PC = not in ai_prefixes (ignored),
+        // MD = AI prefix (TestAiHandler doesn't emit for it, but prefix is consumed).
+        let mut buf = b"FA00014074000;PC050;MD3;".to_vec();
+        process_idle_frames(&mut buf, &config, &handler, &event_tx);
+
+        // FA should produce a FrequencyChanged event.
+        let event = event_rx.try_recv().unwrap();
+        assert!(
+            matches!(event, RigEvent::FrequencyChanged { freq_hz, .. } if freq_hz == 14_074_000),
+            "expected FrequencyChanged, got {event:?}"
+        );
+
+        // PC is not an AI prefix — no event. MD is an AI prefix but TestAiHandler
+        // only handles FA — no additional event.
+        assert!(event_rx.try_recv().is_err());
+
+        // Buffer should be fully consumed.
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn process_idle_frames_incomplete_preserved() {
+        let config = IoConfig {
+            ai_enabled: true,
+            ..test_config()
+        };
+        let handler = TestAiHandler;
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+
+        // FA is complete; MD is incomplete (no terminator).
+        let mut buf = b"FA00014074000;MD".to_vec();
+        process_idle_frames(&mut buf, &config, &handler, &event_tx);
+
+        // FA event should be emitted.
+        let event = event_rx.try_recv().unwrap();
+        assert!(matches!(event, RigEvent::FrequencyChanged { .. }));
+
+        // Incomplete "MD" should remain in the buffer.
+        assert_eq!(buf, b"MD");
+    }
+
+    // =======================================================================
+    // D.1b — drain_idle_frames edge cases
+    // =======================================================================
+
+    #[test]
+    fn drain_idle_frames_error_response_consumed() {
+        let config = test_config();
+        let mut buf = b"?;".to_vec();
+        drain_idle_frames(&mut buf, &config);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn drain_idle_frames_multiple_errors() {
+        let config = test_config();
+        let mut buf = b"?;?;FA00014074000;".to_vec();
+        drain_idle_frames(&mut buf, &config);
+        assert!(buf.is_empty());
+    }
+
+    // =======================================================================
+    // D.1b — Yaesu process_idle_frames with digit suffix
+    // =======================================================================
+
+    #[test]
+    fn process_idle_frames_yaesu_digit_suffix() {
+        let config = IoConfig {
+            ai_enabled: true,
+            ..yaesu_test_config()
+        };
+        let handler = YaesuTestAiHandler;
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+
+        // MD03 → prefix "MD0", data "3" (digit suffix absorbed).
+        // SM0015 → prefix "SM0", data "015" (SM0 is not in ai_prefixes → ignored).
+        // FA014250000 → prefix "FA", data "014250000" (AI prefix → handled).
+        let mut buf = b"MD03;SM0015;FA014250000;".to_vec();
+        process_idle_frames(&mut buf, &config, &handler, &event_tx);
+
+        // MD0 is in ai_prefixes → YaesuTestAiHandler emits ModeChanged.
+        let event = event_rx.try_recv().unwrap();
+        assert!(
+            matches!(event, RigEvent::ModeChanged { .. }),
+            "expected ModeChanged for MD0, got {event:?}"
+        );
+
+        // SM0 is NOT in yaesu ai_prefixes → no event (logged and discarded).
+        // FA is in ai_prefixes → FrequencyChanged.
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            RigEvent::FrequencyChanged { freq_hz, .. } => {
+                assert_eq!(freq_hz, 14_250_000);
+            }
+            other => panic!("expected FrequencyChanged for FA, got {other:?}"),
+        }
+
+        // No more events.
+        assert!(event_rx.try_recv().is_err());
+
+        // Buffer should be fully consumed.
+        assert!(buf.is_empty());
+    }
 }

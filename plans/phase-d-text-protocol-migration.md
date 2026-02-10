@@ -60,7 +60,7 @@ Alternative: `riglib-core/src/text_io.rs` — simpler dependency graph but muddi
 
 ---
 
-## Sub-Phase D.1a — Text-Protocol IO Task Core
+## Sub-Phase D.1a — Text-Protocol IO Task Core ✅ COMPLETE
 
 **Scope:** IO task loop, types, and command execution. One session.
 
@@ -108,7 +108,7 @@ pub struct TextProtocolConfig {
 
 ---
 
-## Sub-Phase D.1b — Text-Protocol IO Task Tests and Edge Cases
+## Sub-Phase D.1b — Text-Protocol IO Task Tests and Edge Cases ✅ COMPLETE
 
 **Scope:** Test suite and edge-case validation. One session. Depends on D.1a.
 
