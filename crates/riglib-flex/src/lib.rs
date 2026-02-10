@@ -63,6 +63,6 @@ pub mod rig;
 pub mod state;
 pub mod vita49;
 
-pub use builder::FlexRadioBuilder;
+pub use builder::{FlexRadioBuilder, FlexTransports};
 pub use dax::{DAX_CHANNELS, DAX_SAMPLE_RATE, DaxStream, dax_audio_config};
 pub use rig::FlexRadio;
