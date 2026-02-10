@@ -2104,7 +2104,11 @@ mod tests {
             .meter_value("SLC0-S")
             .await
             .expect("meter value should be updated");
-        assert_eq!(value2, 42, "expected updated meter value 42, got {}", value2);
+        assert_eq!(
+            value2, 42,
+            "expected updated meter value 42, got {}",
+            value2
+        );
 
         client.disconnect().await.unwrap();
         server.abort();

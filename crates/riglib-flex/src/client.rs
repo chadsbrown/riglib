@@ -133,8 +133,8 @@ impl SmartSdrClient {
         let _ = stream.set_nodelay(true);
 
         let (read_half, write_half) = tokio::io::split(stream);
-        let reader = Box::new(BufReader::new(read_half))
-            as Box<dyn AsyncBufRead + Unpin + Send + 'static>;
+        let reader =
+            Box::new(BufReader::new(read_half)) as Box<dyn AsyncBufRead + Unpin + Send + 'static>;
         let writer = Box::new(write_half) as Box<dyn AsyncWrite + Unpin + Send + 'static>;
 
         let client = Self::from_streams(reader, writer, options).await?;
@@ -499,10 +499,7 @@ impl SmartSdrClient {
     /// client.start_mock_udp_receiver(rx).await;
     /// tx.send(vita49_packet_bytes).await.unwrap();
     /// ```
-    pub async fn start_mock_udp_receiver(
-        &self,
-        mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
-    ) {
+    pub async fn start_mock_udp_receiver(&self, mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>) {
         let state = Arc::clone(&self.state);
         let dax_streams = Arc::clone(&self.dax_streams);
 
@@ -536,9 +533,7 @@ impl SmartSdrClient {
 // ---------------------------------------------------------------------------
 
 /// Read a single line from the TCP stream during the handshake phase.
-async fn read_handshake_line(
-    reader: &mut (dyn AsyncBufRead + Unpin + Send),
-) -> Result<String> {
+async fn read_handshake_line(reader: &mut (dyn AsyncBufRead + Unpin + Send)) -> Result<String> {
     let mut line = String::new();
     let result = tokio::time::timeout(HANDSHAKE_TIMEOUT, reader.read_line(&mut line)).await;
 

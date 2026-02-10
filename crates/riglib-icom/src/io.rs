@@ -181,10 +181,7 @@ impl RigIo {
     #[allow(dead_code)]
     pub async fn shutdown(self) -> Result<Box<dyn Transport>> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        let _ = self
-            .bg_tx
-            .send(Request::Shutdown { reply: reply_tx })
-            .await;
+        let _ = self.bg_tx.send(Request::Shutdown { reply: reply_tx }).await;
         let transport = reply_rx.await.map_err(|_| Error::NotConnected)?;
         let _ = self.task.await;
         Ok(transport)
@@ -210,7 +207,14 @@ pub(crate) fn spawn_io_task(
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
 
-    let task = tokio::spawn(io_loop(transport, config, event_tx, rt_rx, bg_rx, cancel_clone));
+    let task = tokio::spawn(io_loop(
+        transport,
+        config,
+        event_tx,
+        rt_rx,
+        bg_rx,
+        cancel_clone,
+    ));
 
     RigIo {
         rt_tx,
@@ -350,16 +354,17 @@ async fn handle_request(
                 &mut **transport,
                 &cmd_bytes,
                 config,
-                if config.ai_enabled { Some(event_tx) } else { None },
-            ).await;
+                if config.ai_enabled {
+                    Some(event_tx)
+                } else {
+                    None
+                },
+            )
+            .await;
             let _ = reply.send(result);
         }
         Request::CivAckCommand { cmd_bytes, reply } => {
-            let result = execute_civ_ack_command(
-                &mut **transport,
-                &cmd_bytes,
-                config,
-            ).await;
+            let result = execute_civ_ack_command(&mut **transport, &cmd_bytes, config).await;
             let _ = reply.send(result);
         }
         Request::SetLine { dtr, on, reply } => {
@@ -442,9 +447,7 @@ async fn execute_civ_command(
                                     && frame.src_addr == civ_address
                                 {
                                     if frame.is_nak() {
-                                        return Err(Error::Protocol(
-                                            "rig returned NAK".into(),
-                                        ));
+                                        return Err(Error::Protocol("rig returned NAK".into()));
                                     }
                                     return Ok(frame);
                                 }
@@ -475,9 +478,7 @@ async fn execute_civ_command(
                                     collision_detected = true;
                                     break;
                                 }
-                                return Err(Error::Protocol(
-                                    "CI-V bus collision".into(),
-                                ));
+                                return Err(Error::Protocol("CI-V bus collision".into()));
                             }
                         }
                     }
@@ -492,9 +493,7 @@ async fn execute_civ_command(
                     // Transport timed out. Try one more decode pass on
                     // any accumulated partial data.
                     if !response_buf.is_empty() {
-                        if let DecodeResult::Frame(frame, _) =
-                            civ::decode_frame(&response_buf)
-                        {
+                        if let DecodeResult::Frame(frame, _) = civ::decode_frame(&response_buf) {
                             if frame.dst_addr == CONTROLLER_ADDR
                                 && frame.src_addr == civ_address
                                 && !frame.is_nak()
@@ -539,11 +538,7 @@ async fn execute_civ_ack_command(
 /// Process complete transceive frames in the idle buffer, emitting events.
 ///
 /// Delegates to the existing transceive frame processing logic.
-fn process_idle_frames(
-    buf: &mut Vec<u8>,
-    civ_address: u8,
-    event_tx: &broadcast::Sender<RigEvent>,
-) {
+fn process_idle_frames(buf: &mut Vec<u8>, civ_address: u8, event_tx: &broadcast::Sender<RigEvent>) {
     transceive::process_transceive_frames(buf, civ_address, event_tx);
 }
 
@@ -620,7 +615,9 @@ mod tests {
             reply: reply_tx,
         };
         match request {
-            Request::CivCommand { cmd_bytes: bytes, .. } => {
+            Request::CivCommand {
+                cmd_bytes: bytes, ..
+            } => {
                 assert_eq!(bytes, cmd_bytes);
             }
             _ => panic!("expected CivCommand"),
@@ -636,7 +633,9 @@ mod tests {
             reply: reply_tx,
         };
         match request {
-            Request::CivAckCommand { cmd_bytes: bytes, .. } => {
+            Request::CivAckCommand {
+                cmd_bytes: bytes, ..
+            } => {
                 assert_eq!(bytes, cmd_bytes);
             }
             _ => panic!("expected CivAckCommand"),
@@ -668,7 +667,12 @@ mod tests {
         let cancel = CancellationToken::new();
         let task = tokio::spawn(async {});
 
-        let io = RigIo { rt_tx: bg_tx.clone(), bg_tx, cancel, task };
+        let io = RigIo {
+            rt_tx: bg_tx.clone(),
+            bg_tx,
+            cancel,
+            task,
+        };
         let result = io.command(vec![0x03], Duration::from_millis(100)).await;
         assert!(matches!(result, Err(Error::NotConnected)));
     }
@@ -681,8 +685,15 @@ mod tests {
         let cancel = CancellationToken::new();
         let task = tokio::spawn(async {});
 
-        let io = RigIo { rt_tx: bg_tx.clone(), bg_tx, cancel, task };
-        let result = io.ack_command(vec![0x1C, 0x00, 0x01], Duration::from_millis(100)).await;
+        let io = RigIo {
+            rt_tx: bg_tx.clone(),
+            bg_tx,
+            cancel,
+            task,
+        };
+        let result = io
+            .ack_command(vec![0x1C, 0x00, 0x01], Duration::from_millis(100))
+            .await;
         assert!(matches!(result, Err(Error::NotConnected)));
     }
 
@@ -694,7 +705,12 @@ mod tests {
         let cancel = CancellationToken::new();
         let task = tokio::spawn(async {});
 
-        let io = RigIo { rt_tx: bg_tx.clone(), bg_tx, cancel, task };
+        let io = RigIo {
+            rt_tx: bg_tx.clone(),
+            bg_tx,
+            cancel,
+            task,
+        };
         let result = io.set_line(true, true).await;
         assert!(matches!(result, Err(Error::NotConnected)));
     }
@@ -753,7 +769,9 @@ mod tests {
             }
         });
 
-        let result = io.ack_command(vec![0x1C, 0x00, 0x01], Duration::from_millis(500)).await;
+        let result = io
+            .ack_command(vec![0x1C, 0x00, 0x01], Duration::from_millis(500))
+            .await;
         assert!(result.is_ok());
 
         handler.await.unwrap();
@@ -865,7 +883,12 @@ mod tests {
 
         // First attempt: collision (0xFC in frame body).
         let collision = vec![
-            0xFE, 0xFE, IC7610_ADDR, CONTROLLER_ADDR, civ::COLLISION, 0xFD,
+            0xFE,
+            0xFE,
+            IC7610_ADDR,
+            CONTROLLER_ADDR,
+            civ::COLLISION,
+            0xFD,
         ];
         mock.expect(&cmd, &collision);
 
@@ -902,7 +925,12 @@ mod tests {
 
         let cmd = encode_frame(IC7610_ADDR, CONTROLLER_ADDR, 0x03, None, &[]);
         let collision = vec![
-            0xFE, 0xFE, IC7610_ADDR, CONTROLLER_ADDR, civ::COLLISION, 0xFD,
+            0xFE,
+            0xFE,
+            IC7610_ADDR,
+            CONTROLLER_ADDR,
+            civ::COLLISION,
+            0xFD,
         ];
         mock.expect(&cmd, &collision);
 
@@ -961,13 +989,8 @@ mod tests {
         let cmd = encode_frame(IC7610_ADDR, CONTROLLER_ADDR, 0x03, None, &[]);
 
         let echo = cmd.clone();
-        let unsolicited = encode_frame(
-            0x00,
-            IC7610_ADDR,
-            0x00,
-            None,
-            &civ::freq_to_bcd(14_074_000),
-        );
+        let unsolicited =
+            encode_frame(0x00, IC7610_ADDR, 0x00, None, &civ::freq_to_bcd(14_074_000));
         let response = encode_frame(
             CONTROLLER_ADDR,
             IC7610_ADDR,
@@ -1168,7 +1191,10 @@ mod tests {
         let io = spawn_io_task(Box::new(mock), config, event_tx);
 
         let result = io.command(cmd, Duration::from_millis(500)).await;
-        assert!(result.is_ok(), "expected success after resync, got {result:?}");
+        assert!(
+            result.is_ok(),
+            "expected success after resync, got {result:?}"
+        );
         let frame = result.unwrap();
         assert_eq!(frame.cmd, 0x03);
 
@@ -1206,7 +1232,9 @@ mod tests {
         }
 
         async fn receive(&mut self, _buf: &mut [u8], _timeout: Duration) -> Result<usize> {
-            let count = self.receive_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let count = self
+                .receive_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if count >= self.disconnect_after {
                 Err(Error::NotConnected)
             } else {
@@ -1260,13 +1288,7 @@ mod tests {
 
     #[test]
     fn drain_idle_frames_consumes_complete_frames() {
-        let frame1 = encode_frame(
-            0x00,
-            IC7610_ADDR,
-            0x00,
-            None,
-            &civ::freq_to_bcd(7_000_000),
-        );
+        let frame1 = encode_frame(0x00, IC7610_ADDR, 0x00, None, &civ::freq_to_bcd(7_000_000));
         let frame2 = encode_frame(0x00, IC7610_ADDR, 0x01, None, &[0x03, 0x01]);
 
         let mut buf = Vec::new();
@@ -1279,13 +1301,7 @@ mod tests {
 
     #[test]
     fn drain_idle_frames_preserves_incomplete() {
-        let frame = encode_frame(
-            0x00,
-            IC7610_ADDR,
-            0x00,
-            None,
-            &civ::freq_to_bcd(7_000_000),
-        );
+        let frame = encode_frame(0x00, IC7610_ADDR, 0x00, None, &civ::freq_to_bcd(7_000_000));
 
         let mut buf = Vec::new();
         buf.extend_from_slice(&frame);

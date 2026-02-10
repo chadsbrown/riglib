@@ -324,9 +324,18 @@ fn print_results(model_name: &str, results: &[PhaseResult]) {
         println!();
     }
 
-    let run_count = results.iter().filter(|r| r.outcome != Outcome::Skip).count();
-    let pass_count = results.iter().filter(|r| r.outcome == Outcome::Pass).count();
-    let skip_count = results.iter().filter(|r| r.outcome == Outcome::Skip).count();
+    let run_count = results
+        .iter()
+        .filter(|r| r.outcome != Outcome::Skip)
+        .count();
+    let pass_count = results
+        .iter()
+        .filter(|r| r.outcome == Outcome::Pass)
+        .count();
+    let skip_count = results
+        .iter()
+        .filter(|r| r.outcome == Outcome::Skip)
+        .count();
 
     println!("------------------------------------------------------------");
     if skip_count > 0 {
@@ -442,11 +451,11 @@ async fn poller_task(
 // Phase 1: bg-correctness
 // ---------------------------------------------------------------------------
 
-async fn phase_bg_correctness(
-    rig: &Arc<Box<dyn RigAudio>>,
-    opts: &IoTestOptions,
-) -> PhaseResult {
-    println!("  running bg-correctness ({} seconds)...", opts.phase_duration);
+async fn phase_bg_correctness(rig: &Arc<Box<dyn RigAudio>>, opts: &IoTestOptions) -> PhaseResult {
+    println!(
+        "  running bg-correctness ({} seconds)...",
+        opts.phase_duration
+    );
 
     let rx = receiver_id(opts.rx);
     let poll_rate = opts.poll_rate;
@@ -454,9 +463,8 @@ async fn phase_bg_correctness(
     let rig_clone = Arc::clone(rig);
     let cancel_clone = cancel.clone();
 
-    let handle = tokio::spawn(async move {
-        poller_task(rig_clone, rx, poll_rate, cancel_clone).await
-    });
+    let handle =
+        tokio::spawn(async move { poller_task(rig_clone, rx, poll_rate, cancel_clone).await });
 
     tokio::time::sleep(Duration::from_secs(opts.phase_duration)).await;
     cancel.cancel();
@@ -473,7 +481,11 @@ async fn phase_bg_correctness(
     let pass = error_rate <= opts.max_error_rate;
     let mut detail = format!(
         "{} commands in {:.1}s ({:.1} cmd/s), {} errors ({:.2}%)\n",
-        pr.commands, elapsed, rate, pr.errors, error_rate * 100.0,
+        pr.commands,
+        elapsed,
+        rate,
+        pr.errors,
+        error_rate * 100.0,
     );
     if let Some(stats) = pr.stats.compute() {
         detail.push_str(&stats.fmt_line());
@@ -490,10 +502,7 @@ async fn phase_bg_correctness(
 // Phase 2: throughput
 // ---------------------------------------------------------------------------
 
-async fn phase_throughput(
-    rig: &Arc<Box<dyn RigAudio>>,
-    opts: &IoTestOptions,
-) -> PhaseResult {
+async fn phase_throughput(rig: &Arc<Box<dyn RigAudio>>, opts: &IoTestOptions) -> PhaseResult {
     println!("  running throughput ({} seconds)...", opts.phase_duration);
 
     let rx = receiver_id(opts.rx);
@@ -531,10 +540,7 @@ async fn phase_throughput(
 // Phase 3: roundtrip — set/get consistency under concurrent load
 // ---------------------------------------------------------------------------
 
-async fn phase_roundtrip(
-    rig: &Arc<Box<dyn RigAudio>>,
-    opts: &IoTestOptions,
-) -> PhaseResult {
+async fn phase_roundtrip(rig: &Arc<Box<dyn RigAudio>>, opts: &IoTestOptions) -> PhaseResult {
     println!(
         "  running roundtrip ({} cycles, poller at {} Hz)...",
         opts.roundtrip_count, opts.poll_rate
@@ -560,9 +566,8 @@ async fn phase_roundtrip(
     // Spawn poller
     let rig_poller = Arc::clone(rig);
     let cancel_poller = cancel.clone();
-    let poller_handle = tokio::spawn(async move {
-        poller_task(rig_poller, rx, poll_rate, cancel_poller).await
-    });
+    let poller_handle =
+        tokio::spawn(async move { poller_task(rig_poller, rx, poll_rate, cancel_poller).await });
 
     // Writer task
     let rig_writer = Arc::clone(rig);
@@ -580,7 +585,7 @@ async fn phase_roundtrip(
             let target = (base_freq as i64 + offset).max(0) as u64;
 
             let t = Instant::now();
-            if let Err(_) = rig_writer.set_frequency(rx, target).await {
+            if rig_writer.set_frequency(rx, target).await.is_err() {
                 mismatched += 1;
                 continue;
             }
@@ -639,10 +644,7 @@ async fn phase_roundtrip(
 // Phase 4: rt-priority — RT priority under BG load
 // ---------------------------------------------------------------------------
 
-async fn phase_rt_priority(
-    rig: &Arc<Box<dyn RigAudio>>,
-    opts: &IoTestOptions,
-) -> PhaseResult {
+async fn phase_rt_priority(rig: &Arc<Box<dyn RigAudio>>, opts: &IoTestOptions) -> PhaseResult {
     if opts.skip_ptt {
         return PhaseResult {
             phase: Phase::RtPriority,
@@ -663,9 +665,8 @@ async fn phase_rt_priority(
     // Spawn poller
     let rig_poller = Arc::clone(rig);
     let cancel_poller = cancel.clone();
-    let poller_handle = tokio::spawn(async move {
-        poller_task(rig_poller, rx, poll_rate, cancel_poller).await
-    });
+    let poller_handle =
+        tokio::spawn(async move { poller_task(rig_poller, rx, poll_rate, cancel_poller).await });
 
     let ptt_safety = Duration::from_millis(opts.ptt_safety_ms);
     let mut ptt_on_stats = LatencyStats::new();
@@ -686,7 +687,10 @@ async fn phase_rt_priority(
                 break;
             }
             Err(_) => {
-                eprintln!("  PTT ON timed out at cycle {} ({}ms safety limit)", cycle, opts.ptt_safety_ms);
+                eprintln!(
+                    "  PTT ON timed out at cycle {} ({}ms safety limit)",
+                    cycle, opts.ptt_safety_ms
+                );
                 ensure_ptt_off(rig.as_ref().as_ref()).await;
                 aborted = true;
                 break;
@@ -706,7 +710,10 @@ async fn phase_rt_priority(
                 break;
             }
             Err(_) => {
-                eprintln!("  PTT OFF timed out at cycle {} ({}ms safety limit)", cycle, opts.ptt_safety_ms);
+                eprintln!(
+                    "  PTT OFF timed out at cycle {} ({}ms safety limit)",
+                    cycle, opts.ptt_safety_ms
+                );
                 ensure_ptt_off(rig.as_ref().as_ref()).await;
                 aborted = true;
                 break;
@@ -731,9 +738,7 @@ async fn phase_rt_priority(
     let on_stats = ptt_on_stats.compute();
     let off_stats = ptt_off_stats.compute();
 
-    let pass = on_stats
-        .as_ref()
-        .is_some_and(|s| s.p95 <= threshold);
+    let pass = on_stats.as_ref().is_some_and(|s| s.p95 <= threshold);
 
     let mut detail = String::new();
     if let Some(s) = &on_stats {
@@ -758,10 +763,7 @@ async fn phase_rt_priority(
 // Phase 5: transceive — event delivery under load
 // ---------------------------------------------------------------------------
 
-async fn phase_transceive(
-    rig: &Arc<Box<dyn RigAudio>>,
-    opts: &IoTestOptions,
-) -> PhaseResult {
+async fn phase_transceive(rig: &Arc<Box<dyn RigAudio>>, opts: &IoTestOptions) -> PhaseResult {
     let caps = rig.capabilities();
     if !caps.has_transceive {
         return PhaseResult {
@@ -772,7 +774,10 @@ async fn phase_transceive(
     }
 
     let poll_rate = opts.poll_rate;
-    println!("  running transceive (20 freq changes, poller at {} Hz)...", poll_rate);
+    println!(
+        "  running transceive (20 freq changes, poller at {} Hz)...",
+        poll_rate
+    );
 
     let rx = receiver_id(opts.rx);
 
@@ -805,9 +810,8 @@ async fn phase_transceive(
     // Spawn poller
     let rig_poller = Arc::clone(rig);
     let cancel_poller = cancel.clone();
-    let poller_handle = tokio::spawn(async move {
-        poller_task(rig_poller, rx, poll_rate, cancel_poller).await
-    });
+    let poller_handle =
+        tokio::spawn(async move { poller_task(rig_poller, rx, poll_rate, cancel_poller).await });
 
     let iterations = 20u32;
     let mut events_received = 0u32;
@@ -834,9 +838,9 @@ async fn phase_transceive(
                     events_received += 1;
                     break;
                 }
-                Ok(Ok(_)) => continue,                  // different event, keep draining
-                Ok(Err(_)) => break,                     // channel error
-                Err(_) => break,                         // timeout
+                Ok(Ok(_)) => continue, // different event, keep draining
+                Ok(Err(_)) => break,   // channel error
+                Err(_) => break,       // timeout
             }
         }
     }
@@ -853,7 +857,10 @@ async fn phase_transceive(
     PhaseResult {
         phase: Phase::Transceive,
         outcome: if pass { Outcome::Pass } else { Outcome::Fail },
-        detail: format!("{}/{} events received ({:.0}%)", events_received, iterations, pct),
+        detail: format!(
+            "{}/{} events received ({:.0}%)",
+            events_received, iterations, pct
+        ),
     }
 }
 
@@ -882,9 +889,8 @@ async fn phase_shutdown(
 
     let rig_poller = Arc::clone(&rig);
     let cancel_poller = cancel.clone();
-    let poller_handle = tokio::spawn(async move {
-        poller_task(rig_poller, rx, poll_rate, cancel_poller).await
-    });
+    let poller_handle =
+        tokio::spawn(async move { poller_task(rig_poller, rx, poll_rate, cancel_poller).await });
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 

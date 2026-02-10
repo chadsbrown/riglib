@@ -211,10 +211,7 @@ impl RigIo {
     /// Shut down the IO task and recover the transport.
     pub async fn shutdown(self) -> Result<Box<dyn Transport>> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        let _ = self
-            .bg_tx
-            .send(Request::Shutdown { reply: reply_tx })
-            .await;
+        let _ = self.bg_tx.send(Request::Shutdown { reply: reply_tx }).await;
         let transport = reply_rx.await.map_err(|_| Error::NotConnected)?;
         let _ = self.task.await;
         Ok(transport)
@@ -242,7 +239,13 @@ pub fn spawn_io_task(
     let cancel_clone = cancel.clone();
 
     let task = tokio::spawn(io_loop(
-        transport, config, event_tx, ai_handler, rt_rx, bg_rx, cancel_clone,
+        transport,
+        config,
+        event_tx,
+        ai_handler,
+        rt_rx,
+        bg_rx,
+        cancel_clone,
     ));
 
     RigIo {
@@ -430,8 +433,7 @@ async fn execute_cat_command(
     } else {
         0
     };
-    let expected_prefix =
-        protocol::extract_command_prefix(cmd, config.digit_suffix_prefixes);
+    let expected_prefix = protocol::extract_command_prefix(cmd, config.digit_suffix_prefixes);
 
     for attempt in 0..=retries {
         if attempt > 0 {
@@ -445,7 +447,10 @@ async fn execute_cat_command(
         let mut response_buf = Vec::new();
 
         loop {
-            match transport.receive(&mut recv_buf, config.command_timeout).await {
+            match transport
+                .receive(&mut recv_buf, config.command_timeout)
+                .await
+            {
                 Ok(n) => {
                     response_buf.extend_from_slice(&recv_buf[..n]);
 
@@ -461,10 +466,8 @@ async fn execute_cat_command(
                     }
 
                     loop {
-                        match protocol::decode_response(
-                            &response_buf,
-                            config.digit_suffix_prefixes,
-                        ) {
+                        match protocol::decode_response(&response_buf, config.digit_suffix_prefixes)
+                        {
                             DecodeResult::Response {
                                 prefix,
                                 data,
@@ -487,9 +490,7 @@ async fn execute_cat_command(
 
                                 debug!(
                                     prefix,
-                                    data,
-                                    expected_prefix,
-                                    "skipping unexpected response"
+                                    data, expected_prefix, "skipping unexpected response"
                                 );
                             }
                             DecodeResult::Error(consumed) => {
@@ -506,10 +507,8 @@ async fn execute_cat_command(
                     // Transport timed out. Try one more decode pass on
                     // any accumulated partial data.
                     if !response_buf.is_empty() {
-                        match protocol::decode_response(
-                            &response_buf,
-                            config.digit_suffix_prefixes,
-                        ) {
+                        match protocol::decode_response(&response_buf, config.digit_suffix_prefixes)
+                        {
                             DecodeResult::Response { prefix, data, .. } => {
                                 if prefix == expected_prefix {
                                     return Ok((prefix, data));
@@ -573,34 +572,27 @@ async fn execute_set_command(
                 }
 
                 loop {
-                    match protocol::decode_response(
-                        &drain_buf,
-                        config.digit_suffix_prefixes,
-                    ) {
+                    match protocol::decode_response(&drain_buf, config.digit_suffix_prefixes) {
                         DecodeResult::Response {
                             prefix,
                             data,
                             consumed,
                         } => {
                             drain_buf.drain(..consumed);
-                            if config.ai_enabled
-                                && config.ai_prefixes.contains(&prefix.as_str())
-                            {
+                            if config.ai_enabled && config.ai_prefixes.contains(&prefix.as_str()) {
                                 ai_handler.process(&prefix, &data, event_tx);
                             }
                         }
                         DecodeResult::Error(consumed) => {
                             drain_buf.drain(..consumed);
-                            return Err(Error::Protocol(
-                                "rig returned error response (?;)".into(),
-                            ));
+                            return Err(Error::Protocol("rig returned error response (?;)".into()));
                         }
                         DecodeResult::Incomplete => break,
                     }
                 }
             }
             Ok(_) | Err(Error::Timeout) => break, // Drain complete, no ?; seen.
-            Err(e) => return Err(e),            // Propagate transport errors.
+            Err(e) => return Err(e),              // Propagate transport errors.
         }
     }
 
@@ -764,7 +756,9 @@ mod tests {
             cancel,
             task,
         };
-        let result = io.command(b"FA;".to_vec(), Duration::from_millis(100)).await;
+        let result = io
+            .command(b"FA;".to_vec(), Duration::from_millis(100))
+            .await;
         assert!(matches!(result, Err(Error::NotConnected)));
     }
 
@@ -805,7 +799,9 @@ mod tests {
             Box::new(NullAiHandler),
         );
 
-        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        let result = io
+            .command(b"FA;".to_vec(), Duration::from_millis(500))
+            .await;
         assert!(result.is_ok());
         let (prefix, data) = result.unwrap();
         assert_eq!(prefix, "FA");
@@ -827,7 +823,9 @@ mod tests {
             Box::new(NullAiHandler),
         );
 
-        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        let result = io
+            .command(b"FA;".to_vec(), Duration::from_millis(500))
+            .await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::Protocol(_)));
 
@@ -1072,14 +1070,11 @@ mod tests {
             ai_enabled: true,
             ..test_config()
         };
-        let io = spawn_io_task(
-            Box::new(mock),
-            config,
-            event_tx,
-            Box::new(TestAiHandler),
-        );
+        let io = spawn_io_task(Box::new(mock), config, event_tx, Box::new(TestAiHandler));
 
-        let result = io.command(b"MD;".to_vec(), Duration::from_millis(500)).await;
+        let result = io
+            .command(b"MD;".to_vec(), Duration::from_millis(500))
+            .await;
         assert!(result.is_ok());
         let (prefix, data) = result.unwrap();
         assert_eq!(prefix, "MD");
@@ -1130,12 +1125,7 @@ mod tests {
             shutdown_command: Some(b"AI0;"),
             ..test_config()
         };
-        let io = spawn_io_task(
-            Box::new(mock),
-            config,
-            event_tx,
-            Box::new(NullAiHandler),
-        );
+        let io = spawn_io_task(Box::new(mock), config, event_tx, Box::new(NullAiHandler));
 
         let result = io.shutdown().await;
         assert!(result.is_ok());
@@ -1162,15 +1152,15 @@ mod tests {
             max_retries: 1,
             ..test_config()
         };
-        let io = spawn_io_task(
-            Box::new(mock),
-            config,
-            event_tx,
-            Box::new(NullAiHandler),
-        );
+        let io = spawn_io_task(Box::new(mock), config, event_tx, Box::new(NullAiHandler));
 
-        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
-        assert!(result.is_ok(), "expected success after resync, got {result:?}");
+        let result = io
+            .command(b"FA;".to_vec(), Duration::from_millis(500))
+            .await;
+        assert!(
+            result.is_ok(),
+            "expected success after resync, got {result:?}"
+        );
         let (prefix, data) = result.unwrap();
         assert_eq!(prefix, "FA");
         assert_eq!(data, "00014074000");
@@ -1205,7 +1195,9 @@ mod tests {
         }
 
         async fn receive(&mut self, _buf: &mut [u8], _timeout: Duration) -> Result<usize> {
-            let count = self.receive_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let count = self
+                .receive_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if count >= self.disconnect_after {
                 Err(Error::NotConnected)
             } else {
@@ -1277,7 +1269,10 @@ mod tests {
         let result = io
             .set_command(b"FA00014074000;".to_vec(), Duration::from_millis(500))
             .await;
-        assert!(result.is_err(), "SET should fail on transport error, got Ok");
+        assert!(
+            result.is_err(),
+            "SET should fail on transport error, got Ok"
+        );
         assert!(
             matches!(result.unwrap_err(), Error::NotConnected),
             "expected NotConnected error"
@@ -1413,7 +1408,9 @@ mod tests {
             Box::new(NullAiHandler),
         );
 
-        let result = io.command(b"MD0;".to_vec(), Duration::from_millis(500)).await;
+        let result = io
+            .command(b"MD0;".to_vec(), Duration::from_millis(500))
+            .await;
         assert!(result.is_ok(), "expected Ok, got {result:?}");
         let (prefix, data) = result.unwrap();
         assert_eq!(prefix, "MD0");
@@ -1436,7 +1433,9 @@ mod tests {
             Box::new(NullAiHandler),
         );
 
-        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        let result = io
+            .command(b"FA;".to_vec(), Duration::from_millis(500))
+            .await;
         assert!(result.is_ok(), "expected Ok, got {result:?}");
         let (prefix, data) = result.unwrap();
         assert_eq!(prefix, "FA");
@@ -1463,7 +1462,9 @@ mod tests {
             Box::new(YaesuTestAiHandler),
         );
 
-        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        let result = io
+            .command(b"FA;".to_vec(), Duration::from_millis(500))
+            .await;
         assert!(result.is_ok(), "expected Ok, got {result:?}");
         let (prefix, data) = result.unwrap();
         assert_eq!(prefix, "FA");
@@ -1497,15 +1498,15 @@ mod tests {
             max_retries: 2,
             ..test_config()
         };
-        let io = spawn_io_task(
-            Box::new(mock),
-            config,
-            event_tx,
-            Box::new(NullAiHandler),
-        );
+        let io = spawn_io_task(Box::new(mock), config, event_tx, Box::new(NullAiHandler));
 
-        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
-        assert!(result.is_ok(), "expected success after retry, got {result:?}");
+        let result = io
+            .command(b"FA;".to_vec(), Duration::from_millis(500))
+            .await;
+        assert!(
+            result.is_ok(),
+            "expected success after retry, got {result:?}"
+        );
         let (prefix, data) = result.unwrap();
         assert_eq!(prefix, "FA");
         assert_eq!(data, "00014074000");
@@ -1526,14 +1527,11 @@ mod tests {
             max_retries: 1,
             ..test_config()
         };
-        let io = spawn_io_task(
-            Box::new(mock),
-            config,
-            event_tx,
-            Box::new(NullAiHandler),
-        );
+        let io = spawn_io_task(Box::new(mock), config, event_tx, Box::new(NullAiHandler));
 
-        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        let result = io
+            .command(b"FA;".to_vec(), Duration::from_millis(500))
+            .await;
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err(), Error::Timeout),
@@ -1559,14 +1557,11 @@ mod tests {
             max_retries: 0,
             ..test_config()
         };
-        let io = spawn_io_task(
-            Box::new(mock),
-            config,
-            event_tx,
-            Box::new(NullAiHandler),
-        );
+        let io = spawn_io_task(Box::new(mock), config, event_tx, Box::new(NullAiHandler));
 
-        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        let result = io
+            .command(b"FA;".to_vec(), Duration::from_millis(500))
+            .await;
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err(), Error::Timeout),
@@ -1596,21 +1591,27 @@ mod tests {
         );
 
         // Command 1: FA query.
-        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        let result = io
+            .command(b"FA;".to_vec(), Duration::from_millis(500))
+            .await;
         assert!(result.is_ok());
         let (prefix, data) = result.unwrap();
         assert_eq!(prefix, "FA");
         assert_eq!(data, "00014074000");
 
         // Command 2: MD query.
-        let result = io.command(b"MD;".to_vec(), Duration::from_millis(500)).await;
+        let result = io
+            .command(b"MD;".to_vec(), Duration::from_millis(500))
+            .await;
         assert!(result.is_ok());
         let (prefix, data) = result.unwrap();
         assert_eq!(prefix, "MD");
         assert_eq!(data, "3");
 
         // Command 3: TX query.
-        let result = io.command(b"TX;".to_vec(), Duration::from_millis(500)).await;
+        let result = io
+            .command(b"TX;".to_vec(), Duration::from_millis(500))
+            .await;
         assert!(result.is_ok());
         let (prefix, data) = result.unwrap();
         assert_eq!(prefix, "TX");
@@ -1677,17 +1678,15 @@ mod tests {
             ai_enabled: true,
             ..test_config()
         };
-        let io = spawn_io_task(
-            Box::new(mock),
-            config,
-            event_tx,
-            Box::new(TestAiHandler),
-        );
+        let io = spawn_io_task(Box::new(mock), config, event_tx, Box::new(TestAiHandler));
 
         let result = io
             .set_command(b"FA00014074000;".to_vec(), Duration::from_millis(500))
             .await;
-        assert!(result.is_ok(), "SET should succeed even with AI frame during drain");
+        assert!(
+            result.is_ok(),
+            "SET should succeed even with AI frame during drain"
+        );
 
         // Verify the AI frame was processed as an event.
         let event = event_rx.try_recv().unwrap();
@@ -1790,12 +1789,16 @@ mod tests {
         );
 
         // First command should fail with Protocol error.
-        let result = io.command(b"XX;".to_vec(), Duration::from_millis(500)).await;
+        let result = io
+            .command(b"XX;".to_vec(), Duration::from_millis(500))
+            .await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::Protocol(_)));
 
         // Second command should succeed — error state does not leak.
-        let result = io.command(b"FA;".to_vec(), Duration::from_millis(500)).await;
+        let result = io
+            .command(b"FA;".to_vec(), Duration::from_millis(500))
+            .await;
         assert!(result.is_ok(), "second command failed: {result:?}");
         let (prefix, data) = result.unwrap();
         assert_eq!(prefix, "FA");

@@ -129,7 +129,9 @@ impl IcomRig {
 
     /// Execute a command and expect an ACK frame in return.
     async fn execute_ack_command(&self, cmd: &[u8]) -> Result<()> {
-        self.io.ack_command(cmd.to_vec(), self.command_timeout).await
+        self.io
+            .ack_command(cmd.to_vec(), self.command_timeout)
+            .await
     }
 
     /// Execute a CI-V SET command via the real-time (priority) channel.
@@ -2287,13 +2289,15 @@ mod tests {
         abort_handle.abort();
 
         // The command task should complete (not hang forever).
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            cmd_task,
-        )
-        .await;
-        assert!(result.is_ok(), "command task should complete after cancel+abort");
+        let result = tokio::time::timeout(std::time::Duration::from_millis(500), cmd_task).await;
+        assert!(
+            result.is_ok(),
+            "command task should complete after cancel+abort"
+        );
         let inner = result.unwrap().unwrap();
-        assert!(inner.is_err(), "command should fail after IO task cancelled");
+        assert!(
+            inner.is_err(),
+            "command should fail after IO task cancelled"
+        );
     }
 }

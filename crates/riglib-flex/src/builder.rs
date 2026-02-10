@@ -477,9 +477,7 @@ mod tests {
     /// side of a duplex stream. The client sends 4 no-wait commands after
     /// the handshake when auto_subscribe is true: client program, sub slice,
     /// sub meter, sub tx.
-    async fn drain_subscriptions(
-        reader: &mut (impl AsyncBufReadExt + Unpin),
-    ) {
+    async fn drain_subscriptions(reader: &mut (impl AsyncBufReadExt + Unpin)) {
         for _ in 0..4 {
             let mut line = String::new();
             reader.read_line(&mut line).await.unwrap();
@@ -609,7 +607,10 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         // Verify the state was updated from the status message.
-        let freq = rig.get_frequency(riglib_core::ReceiverId::from_index(0)).await.unwrap();
+        let freq = rig
+            .get_frequency(riglib_core::ReceiverId::from_index(0))
+            .await
+            .unwrap();
         assert_eq!(freq, 14_250_000);
 
         // Verify a FrequencyChanged event was emitted.

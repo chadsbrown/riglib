@@ -336,10 +336,7 @@ mod tests {
 
     #[test]
     fn extract_prefix_yaesu_non_dsp() {
-        assert_eq!(
-            extract_command_prefix(b"FA014250000;", YAESU_DSP),
-            "FA"
-        );
+        assert_eq!(extract_command_prefix(b"FA014250000;", YAESU_DSP), "FA");
     }
 
     #[test]
