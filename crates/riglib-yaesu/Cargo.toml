@@ -12,6 +12,7 @@ audio = ["riglib-transport/audio"]
 
 [dependencies]
 riglib-core.workspace = true
+riglib-text-io.workspace = true
 riglib-transport.workspace = true
 async-trait.workspace = true
 tokio.workspace = true

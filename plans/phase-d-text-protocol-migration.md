@@ -151,7 +151,7 @@ Build comprehensive tests for the generic text IO task:
 
 ---
 
-## Sub-Phase D.3 — Migrate Elecraft Backend
+## Sub-Phase D.3 — Migrate Elecraft Backend ✅ COMPLETE
 
 **Scope:** Similar to Kenwood with extensions. One session. Depends on D.1.
 
@@ -171,7 +171,7 @@ Build comprehensive tests for the generic text IO task:
 
 ---
 
-## Sub-Phase D.4 — Migrate Yaesu Backend
+## Sub-Phase D.4 — Migrate Yaesu Backend ✅ COMPLETE
 
 **Scope:** Largest text-protocol backend. One session, possibly two if test migration is extensive. Depends on D.1.
 

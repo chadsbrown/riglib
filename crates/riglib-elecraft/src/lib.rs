@@ -48,7 +48,6 @@ pub mod commands;
 pub mod models;
 pub mod protocol;
 pub mod rig;
-pub mod transceive;
 
 // Re-export the primary types for ergonomic `use riglib_elecraft::*`.
 pub use builder::ElecraftBuilder;
