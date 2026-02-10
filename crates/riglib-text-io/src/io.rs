@@ -329,7 +329,7 @@ async fn io_loop(
             }
 
             // Idle: read unsolicited data from the serial port.
-            _ = async {
+            idle_ok = async {
                 let mut buf = [0u8; 256];
                 match transport.receive(&mut buf, Duration::from_millis(100)).await {
                     Ok(n) if n > 0 => {
@@ -340,7 +340,7 @@ async fn io_loop(
                                 "idle buffer overflow, resetting"
                             );
                             idle_buf.clear();
-                            return;
+                            return true;
                         }
                         if config.ai_enabled {
                             process_idle_frames(
@@ -352,14 +352,24 @@ async fn io_loop(
                         } else {
                             drain_idle_frames(&mut idle_buf, &config);
                         }
+                        true
                     }
-                    _ => {
-                        // Timeout or error — yield briefly so the loop
-                        // can check for commands or cancellation.
+                    Ok(_) | Err(Error::Timeout) => {
+                        // Timeout or zero bytes — normal idle behavior.
                         tokio::time::sleep(Duration::from_millis(10)).await;
+                        true
+                    }
+                    Err(e) => {
+                        tracing::error!("transport error in idle read: {e}");
+                        false
                     }
                 }
-            } => {}
+            } => {
+                if !idle_ok {
+                    let _ = event_tx.send(RigEvent::Disconnected);
+                    break;
+                }
+            }
         }
     }
 }
@@ -589,7 +599,8 @@ async fn execute_set_command(
                     }
                 }
             }
-            _ => break, // Timeout or error — drain is done.
+            Ok(_) | Err(Error::Timeout) => break, // Drain complete, no ?; seen.
+            Err(e) => return Err(e),            // Propagate transport errors.
         }
     }
 
@@ -1165,6 +1176,112 @@ mod tests {
         assert_eq!(data, "00014074000");
 
         let _ = io.shutdown().await;
+    }
+
+    // =======================================================================
+    // Disconnect detection tests
+    // =======================================================================
+
+    /// A transport that returns NotConnected after a specified number of
+    /// receive() calls, simulating a USB disconnect.
+    struct DisconnectingTransport {
+        receive_count: std::sync::atomic::AtomicU32,
+        disconnect_after: u32,
+    }
+
+    impl DisconnectingTransport {
+        fn new(disconnect_after: u32) -> Self {
+            Self {
+                receive_count: std::sync::atomic::AtomicU32::new(0),
+                disconnect_after,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl riglib_core::transport::Transport for DisconnectingTransport {
+        async fn send(&mut self, _data: &[u8]) -> Result<()> {
+            Ok(())
+        }
+
+        async fn receive(&mut self, _buf: &mut [u8], _timeout: Duration) -> Result<usize> {
+            let count = self.receive_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if count >= self.disconnect_after {
+                Err(Error::NotConnected)
+            } else {
+                Err(Error::Timeout)
+            }
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        async fn set_dtr(&mut self, _on: bool) -> Result<()> {
+            Ok(())
+        }
+
+        async fn set_rts(&mut self, _on: bool) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn io_task_exits_on_transport_disconnect() {
+        // Simulate a USB disconnect: after 2 idle reads (returning Timeout),
+        // the transport returns NotConnected. The IO task should exit and
+        // emit a Disconnected event.
+        let transport = DisconnectingTransport::new(2);
+
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let io = spawn_io_task(
+            Box::new(transport),
+            test_config(),
+            event_tx,
+            Box::new(NullAiHandler),
+        );
+
+        // The IO task should exit on its own when it hits NotConnected.
+        let result = tokio::time::timeout(Duration::from_secs(2), io.task).await;
+        assert!(result.is_ok(), "IO task did not exit after disconnect");
+        assert!(result.unwrap().is_ok(), "IO task panicked");
+
+        // Verify that a Disconnected event was emitted.
+        let event = event_rx.try_recv().unwrap();
+        assert!(
+            matches!(event, RigEvent::Disconnected),
+            "expected Disconnected event, got {event:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn io_task_set_command_propagates_transport_error() {
+        // A SET command should propagate transport errors (e.g. NotConnected)
+        // instead of silently returning Ok(()).
+        // DisconnectingTransport(0) returns NotConnected on every receive().
+        // The send() succeeds, but the drain receive() fails immediately.
+        let transport = DisconnectingTransport::new(0);
+
+        let (event_tx, _) = broadcast::channel(16);
+        let io = spawn_io_task(
+            Box::new(transport),
+            test_config(),
+            event_tx,
+            Box::new(NullAiHandler),
+        );
+
+        let result = io
+            .set_command(b"FA00014074000;".to_vec(), Duration::from_millis(500))
+            .await;
+        assert!(result.is_err(), "SET should fail on transport error, got Ok");
+        assert!(
+            matches!(result.unwrap_err(), Error::NotConnected),
+            "expected NotConnected error"
+        );
     }
 
     // =======================================================================
