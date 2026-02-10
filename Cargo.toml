@@ -9,6 +9,7 @@ members = [
     "crates/riglib-elecraft",
     "crates/riglib-kenwood",
     "crates/riglib-flex",
+    "crates/riglib-text-io",
     "crates/riglib-test-harness",
     "test-app",
 ]
@@ -28,6 +29,7 @@ riglib-yaesu = { path = "crates/riglib-yaesu" }
 riglib-elecraft = { path = "crates/riglib-elecraft" }
 riglib-kenwood = { path = "crates/riglib-kenwood" }
 riglib-flex = { path = "crates/riglib-flex" }
+riglib-text-io = { path = "crates/riglib-text-io" }
 riglib-test-harness = { path = "crates/riglib-test-harness" }
 
 tokio = { version = "1", features = ["full"] }
