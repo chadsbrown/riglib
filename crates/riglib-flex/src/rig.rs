@@ -82,9 +82,11 @@ impl FlexRadio {
     }
 
     /// Ensure a slice exists for the given receiver. If the slice does not
-    /// exist and `auto_create_slices` is enabled, create it with sensible
-    /// defaults (14.250 MHz USB). Returns an error if the slice does not
-    /// exist and auto-creation is disabled.
+    /// exist and `auto_create_slices` is enabled, create one with sensible
+    /// defaults (14.250 MHz USB), then verify the requested slice is present.
+    ///
+    /// Returns an error if the requested slice still does not exist after
+    /// auto-creation.
     async fn ensure_slice(&self, rx: ReceiverId) -> Result<()> {
         let state = self.client.state().await;
         let index = rx.index();
@@ -106,6 +108,15 @@ impl FlexRadio {
 
         // Brief delay to let the status message update the cached state.
         tokio::time::sleep(Duration::from_millis(SLICE_CREATE_SETTLE_MS)).await;
+
+        // Do not claim success unless the requested slice now exists.
+        let state = self.client.state().await;
+        if !state.slices.contains_key(&index) {
+            return Err(Error::InvalidParameter(format!(
+                "slice {} does not exist after auto-create",
+                index
+            )));
+        }
 
         Ok(())
     }

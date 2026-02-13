@@ -51,6 +51,14 @@ impl MeterMap {
     ///
     /// If the name or ID was previously registered, the old mapping is replaced.
     pub fn insert(&mut self, id: u16, name: &str) {
+        if let Some(old_name) = self.id_to_name.remove(&id) {
+            self.name_to_id.remove(&old_name);
+        }
+
+        if let Some(old_id) = self.name_to_id.remove(name) {
+            self.id_to_name.remove(&old_id);
+        }
+
         self.name_to_id.insert(name.to_string(), id);
         self.id_to_name.insert(id, name.to_string());
     }
@@ -139,6 +147,18 @@ mod tests {
         // ID 1 now maps to "new_name"
         assert_eq!(map.name_for_id(1), Some("new_name"));
         assert_eq!(map.id_for_name("new_name"), Some(1));
+        assert_eq!(map.id_for_name("old_name"), None);
+    }
+
+    #[test]
+    fn insert_name_with_new_id_removes_stale_reverse_mapping() {
+        let mut map = MeterMap::new();
+        map.insert(1, "s-meter");
+        map.insert(2, "s-meter");
+
+        assert_eq!(map.id_for_name("s-meter"), Some(2));
+        assert_eq!(map.name_for_id(1), None);
+        assert_eq!(map.name_for_id(2), Some("s-meter"));
     }
 
     #[test]
