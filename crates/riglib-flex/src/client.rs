@@ -275,15 +275,26 @@ impl SmartSdrClient {
         let encoded = codec::encode_command(seq, command);
         tracing::trace!(seq = seq, command = %command, "Sending command");
 
-        {
+        let send_result: Result<()> = {
             let mut writer = self.tcp_writer.lock().await;
-            let w = writer.as_mut().ok_or(Error::NotConnected)?;
-            w.write_all(&encoded)
-                .await
-                .map_err(|e| Error::Transport(format!("failed to send command: {}", e)))?;
-            w.flush()
-                .await
-                .map_err(|e| Error::Transport(format!("failed to flush command: {}", e)))?;
+            match writer.as_mut() {
+                None => Err(Error::NotConnected),
+                Some(w) => {
+                    if let Err(e) = w.write_all(&encoded).await {
+                        Err(Error::Transport(format!("failed to send command: {}", e)))
+                    } else if let Err(e) = w.flush().await {
+                        Err(Error::Transport(format!("failed to flush command: {}", e)))
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+        };
+        if let Err(err) = send_result {
+            // If command transmission failed, remove the pending entry.
+            let mut pending = self.pending.lock().await;
+            pending.remove(&seq);
+            return Err(err);
         }
 
         // Await the response with timeout.
@@ -374,6 +385,9 @@ impl SmartSdrClient {
         });
 
         let mut udp_handle = self.udp_read_handle.lock().await;
+        if let Some(old) = udp_handle.take() {
+            old.abort();
+        }
         *udp_handle = Some(handle);
 
         Ok(())
@@ -510,6 +524,9 @@ impl SmartSdrClient {
         });
 
         let mut udp_handle = self.udp_read_handle.lock().await;
+        if let Some(old) = udp_handle.take() {
+            old.abort();
+        }
         *udp_handle = Some(handle);
     }
 
@@ -872,6 +889,9 @@ async fn udp_read_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::io::AsyncWrite;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
 
@@ -890,6 +910,62 @@ mod tests {
         stream.write_all(b"H12345678\n").await.unwrap();
         stream.flush().await.unwrap();
         stream
+    }
+
+    /// Writer that always fails writes/flushes. Used to force send-path errors.
+    struct FailingWriter;
+
+    impl AsyncWrite for FailingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            let err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "intentional write fail");
+            Poll::Ready(Err(err))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            let err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "intentional flush fail");
+            Poll::Ready(Err(err))
+        }
+
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Build a VITA-49 MeterData packet with the given meter readings.
+    fn build_meter_vita49_packet(readings: &[(u16, i16)]) -> Vec<u8> {
+        use crate::vita49::{FLEXRADIO_OUI, HEADER_SIZE};
+
+        let payload_len = readings.len() * 4;
+        let total_bytes = HEADER_SIZE + payload_len;
+        let size_words = (total_bytes / 4) as u16;
+        let mut buf = vec![0u8; total_bytes];
+
+        let mut hw: u32 = 0;
+        hw |= 0x3 << 28; // packet type
+        hw |= 1 << 27; // class-id present
+        hw |= 0x01 << 20; // TSI
+        hw |= 0x01 << 18; // TSF
+        hw |= size_words as u32 & 0x0FFF;
+        buf[0..4].copy_from_slice(&hw.to_be_bytes());
+        buf[4..8].copy_from_slice(&0x0000_0001u32.to_be_bytes()); // stream id
+        buf[8..12].copy_from_slice(&(FLEXRADIO_OUI << 8).to_be_bytes());
+        buf[12..16].copy_from_slice(&((0x534Cu32 << 16) | 0x8002u32).to_be_bytes()); // meter
+
+        let mut offset = HEADER_SIZE;
+        for &(meter_id, value) in readings {
+            buf[offset..offset + 2].copy_from_slice(&meter_id.to_be_bytes());
+            buf[offset + 2..offset + 4].copy_from_slice(&value.to_be_bytes());
+            offset += 4;
+        }
+
+        buf
     }
 
     #[tokio::test]
@@ -1220,6 +1296,95 @@ mod tests {
         let result = client.send_command("info").await;
         assert!(matches!(result, Err(Error::NotConnected)));
 
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_send_command_write_error_cleans_pending() {
+        // Feed only handshake bytes through a duplex reader.
+        let (client_stream, mut server_stream) = tokio::io::duplex(1024);
+        let (client_read, _client_write) = tokio::io::split(client_stream);
+
+        let server = tokio::spawn(async move {
+            server_stream.write_all(b"V1.4.0.0\n").await.unwrap();
+            server_stream.write_all(b"H12345678\n").await.unwrap();
+            server_stream.flush().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+
+        let reader =
+            Box::new(BufReader::new(client_read)) as Box<dyn AsyncBufRead + Unpin + Send + 'static>;
+        let writer = Box::new(FailingWriter) as Box<dyn AsyncWrite + Unpin + Send + 'static>;
+        let options = ClientOptions {
+            auto_subscribe: false,
+            command_timeout: Duration::from_millis(50),
+            ..ClientOptions::default()
+        };
+        let client = SmartSdrClient::from_streams(reader, writer, options)
+            .await
+            .unwrap();
+
+        let result = client.send_command("info").await;
+        assert!(result.is_err());
+
+        // Pending map must be cleaned on immediate send-path failures.
+        let pending = client.pending.lock().await;
+        let keys: Vec<u32> = pending.keys().copied().collect();
+        assert!(
+            pending.is_empty(),
+            "pending map should be empty after write error, keys={keys:?}"
+        );
+        drop(pending);
+
+        client.disconnect().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn test_start_mock_udp_receiver_replaces_old_task() {
+        // Minimal connected client from duplex handshake.
+        let (client_stream, mut server_stream) = tokio::io::duplex(1024);
+        let (client_read, client_write) = tokio::io::split(client_stream);
+
+        let server = tokio::spawn(async move {
+            server_stream.write_all(b"V1.4.0.0\n").await.unwrap();
+            server_stream.write_all(b"H12345678\n").await.unwrap();
+            server_stream.flush().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        });
+
+        let reader =
+            Box::new(BufReader::new(client_read)) as Box<dyn AsyncBufRead + Unpin + Send + 'static>;
+        let writer = Box::new(client_write) as Box<dyn AsyncWrite + Unpin + Send + 'static>;
+        let options = ClientOptions {
+            auto_subscribe: false,
+            ..ClientOptions::default()
+        };
+        let client = SmartSdrClient::from_streams(reader, writer, options)
+            .await
+            .unwrap();
+
+        let (tx1, rx1) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+        client.start_mock_udp_receiver(rx1).await;
+
+        let (tx2, rx2) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+        client.start_mock_udp_receiver(rx2).await;
+
+        // Packet sent to old channel should be ignored after replacement.
+        let packet_old = build_meter_vita49_packet(&[(7, 111)]);
+        tx1.send(packet_old).await.unwrap();
+
+        // Packet sent to new channel should be processed.
+        let packet_new = build_meter_vita49_packet(&[(8, 222)]);
+        tx2.send(packet_new).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let state = client.state().await;
+        assert_eq!(state.meter_values.get(&7), None);
+        assert_eq!(state.meter_values.get(&8), Some(&222));
+
+        client.disconnect().await.unwrap();
         server.abort();
     }
 
