@@ -118,7 +118,7 @@ pub fn ft_dx10() -> YaesuModel {
             attenuator_levels: vec![0, 6, 12, 18],
             antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
             has_cw_keyer: true,
-            has_cw_messages: true,
+            has_cw_messages: false,
             has_vfo_ab_swap: true,
             has_vfo_ab_equal: true,
             has_transceive: true,
@@ -161,7 +161,7 @@ pub fn ft_891() -> YaesuModel {
             attenuator_levels: vec![],
             antenna_ports: vec![AntennaPort::Ant1],
             has_cw_keyer: true,
-            has_cw_messages: true,
+            has_cw_messages: false,
             has_vfo_ab_swap: true,
             has_vfo_ab_equal: true,
             has_transceive: true,
@@ -210,7 +210,7 @@ pub fn ft_991a() -> YaesuModel {
             attenuator_levels: vec![0, 6, 12, 18],
             antenna_ports: vec![AntennaPort::Ant1],
             has_cw_keyer: true,
-            has_cw_messages: true,
+            has_cw_messages: false,
             has_vfo_ab_swap: true,
             has_vfo_ab_equal: true,
             has_transceive: true,
@@ -253,7 +253,7 @@ pub fn ft_dx101d() -> YaesuModel {
             attenuator_levels: vec![0, 6, 12, 18],
             antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
             has_cw_keyer: true,
-            has_cw_messages: true,
+            has_cw_messages: false,
             has_vfo_ab_swap: true,
             has_vfo_ab_equal: true,
             has_transceive: true,
@@ -295,7 +295,7 @@ pub fn ft_dx101mp() -> YaesuModel {
             attenuator_levels: vec![0, 6, 12, 18],
             antenna_ports: vec![AntennaPort::Ant1, AntennaPort::Ant2],
             has_cw_keyer: true,
-            has_cw_messages: true,
+            has_cw_messages: false,
             has_vfo_ab_swap: true,
             has_vfo_ab_equal: true,
             has_transceive: true,
@@ -337,7 +337,7 @@ pub fn ft_710() -> YaesuModel {
             attenuator_levels: vec![0, 6, 12, 18],
             antenna_ports: vec![AntennaPort::Ant1],
             has_cw_keyer: true,
-            has_cw_messages: true,
+            has_cw_messages: false,
             has_vfo_ab_swap: true,
             has_vfo_ab_equal: true,
             has_transceive: true,
@@ -688,11 +688,11 @@ mod tests {
     }
 
     #[test]
-    fn all_models_have_cw_messages() {
+    fn no_models_claim_cw_text_messages() {
         for model in all_yaesu_models() {
             assert!(
-                model.capabilities.has_cw_messages,
-                "{} should support CW messages",
+                !model.capabilities.has_cw_messages,
+                "{} should not claim free-text CW message support",
                 model.name
             );
         }

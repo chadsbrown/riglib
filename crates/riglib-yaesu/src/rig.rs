@@ -824,52 +824,16 @@ impl Rig for YaesuRig {
     }
 
     async fn send_cw_message(&self, message: &str) -> Result<()> {
-        if message.is_empty() {
-            return Ok(());
-        }
-
-        // Split the message into chunks of at most 24 characters.
-        let chars: Vec<char> = message.chars().collect();
-        let chunks: Vec<String> = chars.chunks(24).map(|c| c.iter().collect()).collect();
-
-        debug!(
-            message_len = message.len(),
-            num_chunks = chunks.len(),
-            "sending CW message"
-        );
-
-        for (i, chunk) in chunks.iter().enumerate() {
-            // Poll the buffer status before sending each chunk.
-            const MAX_BUFFER_RETRIES: u32 = 50;
-            for retry in 0..=MAX_BUFFER_RETRIES {
-                let buf_cmd = commands::cmd_read_cw_buffer();
-                let (_prefix, data) = self.execute_command(&buf_cmd).await?;
-                let buffer_full = commands::parse_cw_buffer_response(&data)?;
-
-                if !buffer_full {
-                    break;
-                }
-
-                if retry == MAX_BUFFER_RETRIES {
-                    return Err(Error::Timeout);
-                }
-
-                debug!(retry, "CW buffer full, waiting");
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-
-            let send_cmd = commands::cmd_send_cw_message(chunk);
-            debug!(chunk_index = i, chunk = %chunk, "sending CW chunk");
-            self.execute_set_command(&send_cmd).await?;
-        }
-
-        Ok(())
+        let _ = message;
+        Err(Error::Unsupported(
+            "Yaesu CAT does not support free-text CW message send in this backend".into(),
+        ))
     }
 
     async fn stop_cw_message(&self) -> Result<()> {
-        let cmd = commands::cmd_stop_cw_message();
-        debug!("stopping CW message");
-        self.execute_set_command(&cmd).await
+        Err(Error::Unsupported(
+            "Yaesu CAT does not support free-text CW message send in this backend".into(),
+        ))
     }
 
     async fn enable_transceive(&self) -> Result<()> {
@@ -2053,63 +2017,35 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_cw_message() {
-        let mut mock = MockTransport::new();
-
-        // 1. Buffer check -> buffer ready (data = "0")
-        let buf_cmd = commands::cmd_read_cw_buffer();
-        mock.expect(&buf_cmd, b"KY0;");
-
-        // 2. Send the message
-        let send_cmd = commands::cmd_send_cw_message("TEST");
-        mock.expect(&send_cmd, b"KY TEST;");
-
+        let mock = MockTransport::new();
         let rig = make_test_rig(mock);
-        rig.send_cw_message("TEST").await.unwrap();
+        let err = rig.send_cw_message("TEST").await.unwrap_err();
+        assert!(matches!(err, Error::Unsupported(_)));
     }
 
     #[tokio::test]
     async fn test_send_cw_message_chunked() {
-        let mut mock = MockTransport::new();
-
-        // 34-character message -> 2 chunks: 24 + 10
-        let message = "ABCDEFGHIJKLMNOPQRSTUVWX0123456789";
-        assert_eq!(message.len(), 34);
-
-        // Chunk 1: buffer check + send
-        let buf_cmd = commands::cmd_read_cw_buffer();
-        mock.expect(&buf_cmd, b"KY0;");
-        let send_cmd1 = commands::cmd_send_cw_message("ABCDEFGHIJKLMNOPQRSTUVWX");
-        mock.expect(&send_cmd1, b"KY ABCDEFGHIJKLMNOPQRSTUVWX;");
-
-        // Chunk 2: buffer check + send
-        mock.expect(&buf_cmd, b"KY0;");
-        let send_cmd2 = commands::cmd_send_cw_message("0123456789");
-        mock.expect(&send_cmd2, b"KY 0123456789;");
-
+        let mock = MockTransport::new();
         let rig = make_test_rig(mock);
-        rig.send_cw_message(message).await.unwrap();
+        let message = "ABCDEFGHIJKLMNOPQRSTUVWX0123456789";
+        let err = rig.send_cw_message(message).await.unwrap_err();
+        assert!(matches!(err, Error::Unsupported(_)));
     }
 
     #[tokio::test]
     async fn test_stop_cw_message() {
-        let mut mock = MockTransport::new();
-
-        let stop_cmd = commands::cmd_stop_cw_message();
-        // The stop command is 28 bytes: KY + 25 spaces + ;
-        assert_eq!(stop_cmd.len(), 28);
-        // Response echoes the command
-        mock.expect(&stop_cmd, &stop_cmd);
-
+        let mock = MockTransport::new();
         let rig = make_test_rig(mock);
-        rig.stop_cw_message().await.unwrap();
+        let err = rig.stop_cw_message().await.unwrap_err();
+        assert!(matches!(err, Error::Unsupported(_)));
     }
 
     #[tokio::test]
     async fn test_send_cw_message_empty() {
         let mock = MockTransport::new();
         let rig = make_test_rig(mock);
-        // Empty message should return Ok(()) without any transport calls.
-        rig.send_cw_message("").await.unwrap();
+        let err = rig.send_cw_message("").await.unwrap_err();
+        assert!(matches!(err, Error::Unsupported(_)));
     }
 
     // -----------------------------------------------------------------
