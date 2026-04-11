@@ -23,6 +23,7 @@ use tokio::sync::Mutex;
 
 use crate::civ::{self, CONTROLLER_ADDR, CivFrame};
 use crate::commands;
+use crate::filter;
 use crate::io::RigIo;
 use crate::models::IcomModel;
 use crate::transceive;
@@ -228,6 +229,19 @@ impl IcomRig {
     fn meter_to_alc(normalized: f32) -> f32 {
         normalized
     }
+
+    /// Read the current operating mode without emitting a `ModeChanged`
+    /// event. Used by handlers that need mode context for their own logic
+    /// (e.g. filter-width decoding, where the same call is an internal
+    /// lookup rather than a user-observable mode query).
+    ///
+    /// Assumes the caller has already selected the target receiver.
+    async fn read_mode_raw(&self, _rx: ReceiverId) -> Result<Mode> {
+        let cmd = commands::cmd_read_mode(self.civ_address);
+        let frame = self.execute_command(&cmd).await?;
+        let data = Self::frame_mode_data(&frame);
+        commands::parse_mode_response(&data)
+    }
 }
 
 #[async_trait]
@@ -312,42 +326,49 @@ impl Rig for IcomRig {
 
     async fn get_passband(&self, rx: ReceiverId) -> Result<Passband> {
         self.select_receiver(rx).await?;
+        let mode = self.read_mode_raw(rx).await?;
         let cmd = commands::cmd_read_if_filter(self.civ_address);
-        debug!(receiver = %rx, "reading passband");
+        debug!(receiver = %rx, %mode, "reading passband");
         let frame = self.execute_command(&cmd).await?;
         let data = Self::frame_payload(&frame);
-        // The IF filter response includes the sub-command byte (0x03) and then
-        // filter data. The exact encoding varies by model, but the common
-        // pattern is 2 bytes of BCD filter width in units of 50 Hz.
-        // We skip the sub-command echo byte and parse the remaining payload.
-        if data.len() < 2 {
+        // frame_payload includes the sub-command echo (0x03) followed by
+        // 2 BCD bytes encoding the filter index (0–40 for SSB, 0–49 for AM).
+        let filter_data = if data.first() == Some(&0x03) {
+            &data[1..]
+        } else {
+            &data[..]
+        };
+        if filter_data.len() < 2 {
             return Err(Error::Protocol(format!(
                 "IF filter response too short: {} bytes",
                 data.len()
             )));
         }
-        // Skip sub-cmd echo (0x03) if present, parse remaining as BCD Hz.
-        let filter_data = if data[0] == 0x03 { &data[1..] } else { &data };
-        if filter_data.len() >= 2 {
-            let hi = filter_data[0];
-            let lo = filter_data[1];
-            let hundreds = ((hi >> 4) & 0x0F) as u32 * 1000
-                + (hi & 0x0F) as u32 * 100
-                + ((lo >> 4) & 0x0F) as u32 * 10
-                + (lo & 0x0F) as u32;
-            // Value is in units of 50 Hz on most Icom rigs.
-            Ok(Passband::from_hz(hundreds * 50))
-        } else {
-            Err(Error::Protocol("IF filter response too short".into()))
-        }
+        let hi = filter_data[0];
+        let lo = filter_data[1];
+        let index = ((hi >> 4) & 0x0F) as u32 * 1000
+            + (hi & 0x0F) as u32 * 100
+            + ((lo >> 4) & 0x0F) as u32 * 10
+            + (lo & 0x0F) as u32;
+        let hz = filter::index_to_hz(mode, index).ok_or_else(|| {
+            Error::Protocol(format!(
+                "filter index {index} out of range for mode {mode}"
+            ))
+        })?;
+        Ok(Passband::from_hz(hz))
     }
 
     async fn set_passband(&self, rx: ReceiverId, pb: Passband) -> Result<()> {
         self.select_receiver(rx).await?;
-        // Convert Hz to the rig's 50-Hz unit BCD encoding.
-        let units = pb.hz() / 50;
-        let hi = ((units / 1000 % 10) << 4 | (units / 100 % 10)) as u8;
-        let lo = ((units / 10 % 10) << 4 | (units % 10)) as u8;
+        let mode = self.read_mode_raw(rx).await?;
+        let index = filter::hz_to_index(mode, pb.hz()).ok_or_else(|| {
+            Error::Unsupported(format!(
+                "filter width not controllable via CI-V 1A 03 in mode {mode}"
+            ))
+        })?;
+        // Encode the index (0–49) as 2 BCD bytes, matching the rig's wire format.
+        let hi = (((index / 1000) % 10) << 4 | ((index / 100) % 10)) as u8;
+        let lo = (((index / 10) % 10) << 4 | (index % 10)) as u8;
         let cmd = civ::encode_frame(
             self.civ_address,
             CONTROLLER_ADDR,
@@ -355,7 +376,13 @@ impl Rig for IcomRig {
             Some(0x03),
             &[hi, lo],
         );
-        debug!(receiver = %rx, passband_hz = pb.hz(), "setting passband");
+        debug!(
+            receiver = %rx,
+            %mode,
+            passband_hz = pb.hz(),
+            filter_index = index,
+            "setting passband"
+        );
         self.execute_ack_command(&cmd).await
     }
 
