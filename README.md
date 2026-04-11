@@ -22,7 +22,7 @@ against real hardware. USE AT YOUR OWN RISK.
 | **Yaesu** | FT-891, FT-991A, FT-710, FT-DX10, FT-DX101D, FT-DX101MP |
 | **Kenwood** | TS-590S, TS-590SG, TS-890S, TS-990S |
 | **Elecraft** | K3, K3S, K4, KX2, KX3 |
-| **FlexRadio** | FLEX-6400, FLEX-6400M, FLEX-6600, FLEX-6600M, FLEX-6700, FLEX-8400, FLEX-8600 |
+| **FlexRadio** | ALL KNOWN TO BE FUNDAMENTALLY BROKEN |
 
 ## Quick Start
 
