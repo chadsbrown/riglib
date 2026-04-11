@@ -63,6 +63,14 @@ pub struct IcomBuilder {
     max_reconnect_attempts: u32,
     ptt_method: PttMethod,
     key_line: KeyLine,
+    /// Declarative flag telling riglib whether the operator has CI-V
+    /// Transceive (Auto-Information) mode enabled on the rig. When `true`,
+    /// the idle-read loop parses unsolicited frequency/mode/RIT broadcast
+    /// frames and emits them as [`RigEvent`]s. When `false`, idle frames
+    /// are drained to `/dev/null` to keep the buffer bounded. Riglib never
+    /// reconfigures the rig itself — the operator sets transceive in the
+    /// radio menu and declares the same value here.
+    ai: bool,
     /// USB audio device name for audio streaming (e.g. "USB Audio CODEC").
     #[cfg(feature = "audio")]
     audio_device_name: Option<String>,
@@ -85,6 +93,7 @@ impl IcomBuilder {
             max_reconnect_attempts: 5,
             ptt_method: PttMethod::Cat,
             key_line: KeyLine::None,
+            ai: false,
             #[cfg(feature = "audio")]
             audio_device_name: None,
         }
@@ -167,6 +176,34 @@ impl IcomBuilder {
         self
     }
 
+    /// Declare whether the operator has CI-V Transceive (Auto-Information)
+    /// mode enabled on the rig. Default: `false`.
+    ///
+    /// When `true`, the idle-read loop parses unsolicited frequency, mode,
+    /// and RIT/XIT broadcast frames from the rig and emits them as
+    /// [`RigEvent`]s on the subscribe channel. When `false`, any unsolicited
+    /// bytes on the bus are silently drained so the buffer stays bounded.
+    ///
+    /// **Riglib never reconfigures the rig itself.** The operator sets
+    /// transceive in the radio menu (on IC-7610: `Menu → Set → Connectors →
+    /// CI-V → CI-V Transceive`) and the caller declares the same value
+    /// here. If these get out of sync — e.g. the operator turns transceive
+    /// off on the radio but leaves `ai(true)` — the caller will silently
+    /// stop receiving rig events, because there's nothing on the bus to
+    /// parse. That's operator/caller error; riglib doesn't try to detect
+    /// or correct it.
+    ///
+    /// When using transceive, callers typically should **not** also poll
+    /// [`get_frequency`](riglib_core::rig::Rig::get_frequency) and
+    /// [`get_mode`](riglib_core::rig::Rig::get_mode) at high rates — on
+    /// half-duplex CI-V buses, polling competes with the rig's own
+    /// broadcast frames and can cause collisions and front-panel lag on
+    /// the radio.
+    pub fn ai(mut self, enabled: bool) -> Self {
+        self.ai = enabled;
+        self
+    }
+
     /// Set the CW key line: None (default), DTR, or RTS.
     ///
     /// When set, [`set_cw_key()`](riglib_core::rig::Rig::set_cw_key) will
@@ -202,7 +239,7 @@ impl IcomBuilder {
             transport,
             IoConfig {
                 civ_address,
-                ai_enabled: false,
+                ai_enabled: self.ai,
                 command_timeout: self.command_timeout,
                 auto_retry: self.auto_retry,
                 max_retries: self.max_retries,

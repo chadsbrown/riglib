@@ -904,15 +904,21 @@ impl Rig for IcomRig {
         self.execute_rt_ack_command(&cmd).await
     }
 
+    /// No-op for Icom. Riglib does not reconfigure the rig's CI-V
+    /// Transceive setting — the operator owns that menu. To tell riglib
+    /// that the operator has transceive enabled (so unsolicited broadcast
+    /// frames should be parsed into events), use
+    /// [`IcomBuilder::ai(true)`](crate::builder::IcomBuilder::ai) at
+    /// construction time. Present only to satisfy the trait; callers
+    /// should not depend on this having any effect.
     async fn enable_transceive(&self) -> Result<()> {
-        // No-op: IO task is always running. AI mode is set at builder time.
-        debug!("enable_transceive called (no-op, IO task always active)");
+        debug!("enable_transceive called (no-op; use IcomBuilder::ai(true) instead)");
         Ok(())
     }
 
+    /// No-op for Icom. See [`enable_transceive`](Self::enable_transceive).
     async fn disable_transceive(&self) -> Result<()> {
-        // No-op: IO task is always running. AI mode is set at builder time.
-        debug!("disable_transceive called (no-op, IO task always active)");
+        debug!("disable_transceive called (no-op; use IcomBuilder::ai(false) instead)");
         Ok(())
     }
 
