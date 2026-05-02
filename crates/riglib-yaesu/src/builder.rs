@@ -26,6 +26,7 @@ use riglib_core::error::{Error, Result};
 use riglib_core::transport::Transport;
 use riglib_core::types::{KeyLine, PttMethod, SetCommandMode};
 
+use crate::commands;
 use crate::models::YaesuModel;
 use crate::rig::YaesuRig;
 
@@ -50,6 +51,11 @@ pub struct YaesuBuilder {
     ptt_method: PttMethod,
     key_line: KeyLine,
     set_command_mode: SetCommandMode,
+    /// Whether to enable AI (Auto Information / transceive) mode at connect.
+    /// When `true`, the builder sends `AI1;` after construction so the rig
+    /// pushes unsolicited state-change frames, and the IO task processes
+    /// them into [`RigEvent`](riglib_core::events::RigEvent)s.
+    ai: bool,
     /// USB audio device name for audio streaming (e.g. "USB Audio CODEC").
     #[cfg(feature = "audio")]
     audio_device_name: Option<String>,
@@ -74,6 +80,7 @@ impl YaesuBuilder {
             ptt_method: PttMethod::Cat,
             key_line: KeyLine::None,
             set_command_mode: SetCommandMode::default(),
+            ai: false,
             #[cfg(feature = "audio")]
             audio_device_name: None,
         }
@@ -144,6 +151,33 @@ impl YaesuBuilder {
         self
     }
 
+    /// Enable AI (Auto Information / transceive) mode. Default: `false`.
+    ///
+    /// When `true`, the builder sends `AI1;` to the radio at connect time.
+    /// The rig then pushes unsolicited frequency, mode, PTT, and RIT/XIT
+    /// updates as semicolon-terminated frames; the IO task parses them and
+    /// emits [`RigEvent`](riglib_core::events::RigEvent)s on the channel
+    /// returned by [`subscribe()`](riglib_core::rig::Rig::subscribe). When
+    /// `false` (the default), any unsolicited frames are silently drained
+    /// to keep the buffer bounded.
+    ///
+    /// Unlike Icom CI-V transceive (which is a persistent radio menu
+    /// setting), Yaesu AI mode is purely a CAT command and resets to off
+    /// when the radio is power-cycled. So riglib must actively send `AI1;`
+    /// here — it's not enough for the operator to enable it on the radio.
+    /// On rig drop the IO task sends `AI0;` to leave the radio in a clean
+    /// state for the next client.
+    ///
+    /// When using AI mode, callers typically should **not** also poll
+    /// [`get_frequency`](riglib_core::rig::Rig::get_frequency) and
+    /// [`get_mode`](riglib_core::rig::Rig::get_mode) at high rates — the
+    /// poll responses and the rig's own broadcast frames will compete on
+    /// the bus and the rig may refuse interleaved commands.
+    pub fn ai(mut self, enabled: bool) -> Self {
+        self.ai = enabled;
+        self
+    }
+
     /// Build a [`YaesuRig`] using a serial transport.
     ///
     /// Requires that [`serial_port()`](Self::serial_port) has been called.
@@ -156,7 +190,7 @@ impl YaesuBuilder {
         let baud = self.baud_rate.unwrap_or(self.model.default_baud_rate);
 
         let transport = riglib_transport::SerialTransport::open(port, baud).await?;
-        self.build_with_transport(Box::new(transport))
+        self.build_with_transport(Box::new(transport)).await
     }
 
     /// Build a [`YaesuRig`] with a caller-provided transport.
@@ -165,7 +199,11 @@ impl YaesuBuilder {
     /// `MockTransport` from `riglib-test-harness`) and for
     /// advanced use cases where the caller manages the transport
     /// lifecycle directly.
-    pub fn build_with_transport(self, transport: Box<dyn Transport>) -> Result<YaesuRig> {
+    ///
+    /// When [`ai(true)`](Self::ai) was called, this also sends `AI1;` to
+    /// the radio after the IO task is spawned, so transceive broadcasts
+    /// begin flowing immediately.
+    pub async fn build_with_transport(self, transport: Box<dyn Transport>) -> Result<YaesuRig> {
         // Validate that ptt_method and key_line don't use the same serial line.
         if self.ptt_method == PttMethod::Dtr && self.key_line == KeyLine::Dtr {
             return Err(Error::InvalidParameter(
@@ -178,7 +216,9 @@ impl YaesuBuilder {
             ));
         }
 
-        Ok(YaesuRig::new(
+        let command_timeout = self.command_timeout;
+        let ai = self.ai;
+        let rig = YaesuRig::new(
             transport,
             self.model,
             self.auto_retry,
@@ -187,9 +227,18 @@ impl YaesuBuilder {
             self.ptt_method,
             self.key_line,
             self.set_command_mode,
+            ai,
             #[cfg(feature = "audio")]
             self.audio_device_name,
-        ))
+        );
+
+        if ai {
+            rig.io
+                .set_command(commands::cmd_set_ai(true), command_timeout)
+                .await?;
+        }
+
+        Ok(rig)
     }
 }
 
@@ -205,6 +254,7 @@ mod tests {
         let mock = MockTransport::new();
         let rig = YaesuBuilder::new(ft_dx10())
             .build_with_transport(Box::new(mock))
+            .await
             .unwrap();
 
         assert_eq!(rig.info().manufacturer, riglib_core::Manufacturer::Yaesu);
@@ -221,6 +271,7 @@ mod tests {
             .max_retries(5)
             .command_timeout(Duration::from_millis(200))
             .build_with_transport(Box::new(mock))
+            .await
             .unwrap();
 
         assert_eq!(rig.info().model_name, "FT-DX101D");
@@ -245,8 +296,120 @@ mod tests {
             .max_retries(5)
             .command_timeout(Duration::from_millis(300))
             .build_with_transport(Box::new(mock))
+            .await
             .unwrap();
 
         assert_eq!(rig.info().model_name, "FT-DX10");
+    }
+
+    // ------------------------------------------------------------------
+    // AI / transceive
+    // ------------------------------------------------------------------
+
+    /// `.ai(true)` sends `AI1;` at connect. If anything else were sent, the
+    /// `MockTransport` would refuse the bytes and the build would fail.
+    #[tokio::test]
+    async fn ai_true_sends_ai1_at_connect() {
+        let mut mock = MockTransport::new();
+        mock.expect(b"AI1;", b"");
+
+        let _rig = YaesuBuilder::new(ft_dx10())
+            .ai(true)
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+    }
+
+    /// Default builder (no `.ai()`) sends nothing at connect.
+    #[tokio::test]
+    async fn ai_default_sends_nothing_at_connect() {
+        let mock = MockTransport::new(); // no expectations
+        let _rig = YaesuBuilder::new(ft_dx10())
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+    }
+
+    /// With `.ai(true)`, an interleaved `FB...;` frame in a `FA;` response
+    /// is parsed by the AI handler and emitted as a `FrequencyChanged`
+    /// event for VFO B, while `get_frequency(VFO_A)` still returns the
+    /// trailing `FA` value cleanly.
+    #[tokio::test]
+    async fn ai_true_emits_event_and_doesnt_poison_query() {
+        use riglib_core::events::RigEvent;
+        use riglib_core::types::ReceiverId;
+
+        let mut mock = MockTransport::new();
+        mock.expect(b"AI1;", b"");
+        // Response carries an unsolicited FB broadcast before the actual FA reply.
+        mock.expect(b"FA;", b"FB014300000;FA014250000;");
+
+        let rig = YaesuBuilder::new(ft_dx10())
+            .ai(true)
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+
+        let mut events = rig.subscribe().unwrap();
+        let freq = rig.get_frequency(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(freq, 14_250_000);
+
+        let event = events.try_recv().expect("expected an FB event");
+        match event {
+            RigEvent::FrequencyChanged { receiver, freq_hz } => {
+                assert_eq!(receiver, ReceiverId::VFO_B);
+                assert_eq!(freq_hz, 14_300_000);
+            }
+            other => panic!("expected FrequencyChanged for VFO_B, got {other:?}"),
+        }
+    }
+
+    /// Without `.ai(true)`, an interleaved `FB...;` frame in a response is
+    /// silently dropped — no `VFO_B` event reaches subscribers. (The
+    /// `VFO_A` event that `get_frequency` itself emits on return is
+    /// expected and unrelated to AI mode.)
+    #[tokio::test]
+    async fn ai_default_no_event_from_interleaved_frame() {
+        use riglib_core::events::RigEvent;
+        use riglib_core::types::ReceiverId;
+
+        let mut mock = MockTransport::new();
+        mock.expect(b"FA;", b"FB014300000;FA014250000;");
+
+        let rig = YaesuBuilder::new(ft_dx10())
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+
+        let mut events = rig.subscribe().unwrap();
+        let freq = rig.get_frequency(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(freq, 14_250_000);
+
+        // The only event should be the VFO_A confirmation that get_frequency
+        // emits itself; the interleaved FB broadcast should have been dropped.
+        let event = events.try_recv().expect("expected VFO_A event from get_frequency");
+        assert!(matches!(
+            event,
+            RigEvent::FrequencyChanged {
+                receiver: ReceiverId::VFO_A,
+                freq_hz: 14_250_000,
+            }
+        ));
+        assert!(events.try_recv().is_err(), "no further events expected");
+    }
+
+    /// `enable_transceive` and `disable_transceive` are documented no-ops:
+    /// they must not send any bytes. With no `MockTransport` expectations
+    /// queued, any send would fail with a protocol error.
+    #[tokio::test]
+    async fn enable_disable_transceive_are_noops() {
+        let mock = MockTransport::new();
+        let rig = YaesuBuilder::new(ft_dx10())
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+
+        rig.enable_transceive().await.unwrap();
+        rig.disable_transceive().await.unwrap();
     }
 }

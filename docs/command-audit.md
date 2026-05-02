@@ -122,7 +122,7 @@ Notes:
 | IF info (`IF`) | `cmd_read_information` | validated | Appropriate read path for clarifier/status extraction. | partial corroboration (FT-991/newcat path present) |
 | RIT/XIT (`RT`, `XT`, `RU`, `RD`, `RC`) | corresponding builders | partial | Write-path semantics align; broader read-back behavior depends on IF parsing and model behavior. | partial corroboration (FT-991/newcat path present) |
 | CW (`KS`, `KY`) | read/set CW speed and message commands | validated | Command family and payload shape align. | partial corroboration (FT-991/newcat path present) |
-| AI (`AI`) | `cmd_set_ai` | validated | `AI0/AI2` pattern aligns. | partial corroboration (FT-991/newcat path present) |
+| AI (`AI`) | `cmd_set_ai` | validated | `AI0`/`AI1` per hamlib `newcat_set_trn` (newcat.c). `AI2` is not a valid Yaesu CAT value. | corroborated (`hamlib/rigs/yaesu/newcat.c:7585`) |
 
 ## Kenwood
 
@@ -141,7 +141,7 @@ Notes:
 | Passband (`SH`) | read/set builders | partial | Valid family, but exact index/value mapping is model-specific. | inconclusive (kenwood.c not extracted in-session) |
 | RIT/XIT (`RT`, `XT`, `RO`, `RU`, `RD`, `RC`) | corresponding builders | validated | Command family and offset strategy align with refs. | inconclusive (kenwood.c not extracted in-session) |
 | CW (`KS`, `KY`) | speed + message functions | validated | Format and fixed-length/padding behavior align. | inconclusive (kenwood.c not extracted in-session) |
-| AI (`AI`) | `cmd_set_ai` | validated | Core behavior aligns. | inconclusive (kenwood.c not extracted in-session) |
+| AI (`AI`) | `cmd_set_ai` (model-aware via `KenwoodModel::ai_enable_byte`) | validated | Enable byte is model-dependent: TS-990S → `AI2`, all others (TS-590S/SG, TS-890S) → `AI1`. Disable always `AI0`. | corroborated (`hamlib/rigs/kenwood/kenwood.c:5284` `kenwood_set_trn`) |
 | A=B (`AB`) | `cmd_vfo_a_eq_b` | validated | Standard behavior. | inconclusive (kenwood.c not extracted in-session) |
 
 ## Elecraft

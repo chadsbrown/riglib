@@ -1032,6 +1032,7 @@ async fn create_rig(cli: &Cli) -> Result<Box<dyn RigAudio>> {
                 let mock = MockTransport::new();
                 let rig = builder
                     .build_with_transport(Box::new(mock))
+                    .await
                     .context("failed to build YaesuRig with mock transport")?;
                 println!("Connected (mock transport) -- Yaesu {}", model.name);
                 Ok(Box::new(rig))

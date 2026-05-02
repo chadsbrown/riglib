@@ -131,7 +131,7 @@ impl riglib_text_io::io::AiHandler for YaesuAiHandler {
 /// Constructed via [`YaesuBuilder`](crate::builder::YaesuBuilder). All rig
 /// communication goes through the [`Transport`] provided at build time.
 pub struct YaesuRig {
-    io: riglib_text_io::io::RigIo,
+    pub(crate) io: riglib_text_io::io::RigIo,
     model: YaesuModel,
     event_tx: broadcast::Sender<RigEvent>,
     command_timeout: Duration,
@@ -167,6 +167,7 @@ impl YaesuRig {
         ptt_method: PttMethod,
         key_line: KeyLine,
         set_command_mode: SetCommandMode,
+        ai_enabled: bool,
         #[cfg(feature = "audio")] audio_device_name: Option<String>,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(256);
@@ -177,7 +178,7 @@ impl YaesuRig {
         };
 
         let config = riglib_text_io::io::IoConfig {
-            ai_enabled: false,
+            ai_enabled,
             command_timeout,
             auto_retry,
             max_retries,
@@ -836,16 +837,18 @@ impl Rig for YaesuRig {
         ))
     }
 
+    /// AI (Auto Information) mode is configured declaratively at build
+    /// time via [`YaesuBuilder::ai`](crate::builder::YaesuBuilder::ai); this
+    /// runtime method is a no-op kept for trait compatibility.
     async fn enable_transceive(&self) -> Result<()> {
-        self.io
-            .set_command(b"AI2;".to_vec(), self.command_timeout)
-            .await
+        debug!("enable_transceive called (no-op; use YaesuBuilder::ai(true) instead)");
+        Ok(())
     }
 
+    /// No-op for Yaesu. See [`enable_transceive`](Self::enable_transceive).
     async fn disable_transceive(&self) -> Result<()> {
-        self.io
-            .set_command(b"AI0;".to_vec(), self.command_timeout)
-            .await
+        debug!("disable_transceive called (no-op; use YaesuBuilder::ai(true) instead)");
+        Ok(())
     }
 
     fn subscribe(&self) -> Result<broadcast::Receiver<RigEvent>> {
@@ -926,6 +929,7 @@ mod tests {
             PttMethod::Cat,
             KeyLine::None,
             SetCommandMode::NoVerify,
+            false, // ai_enabled
             #[cfg(feature = "audio")]
             None,
         )
@@ -944,6 +948,7 @@ mod tests {
             PttMethod::Cat,
             KeyLine::None,
             SetCommandMode::NoVerify,
+            false, // ai_enabled
             #[cfg(feature = "audio")]
             None,
         )
@@ -1398,6 +1403,7 @@ mod tests {
             PttMethod::Cat,
             KeyLine::None,
             SetCommandMode::NoVerify,
+            false, // ai_enabled
             #[cfg(feature = "audio")]
             None,
         );
@@ -1610,6 +1616,7 @@ mod tests {
             PttMethod::Cat,
             KeyLine::None,
             SetCommandMode::NoVerify,
+            false, // ai_enabled
             #[cfg(feature = "audio")]
             None,
         );
@@ -2068,6 +2075,7 @@ mod tests {
                 PttMethod::Cat,
                 KeyLine::None,
                 SetCommandMode::NoVerify,
+                false, // ai_enabled
                 device_name.map(|s| s.to_string()),
             )
         }

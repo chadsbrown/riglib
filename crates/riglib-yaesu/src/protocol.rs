@@ -269,8 +269,8 @@ mod tests {
 
     #[test]
     fn encode_auto_info_on() {
-        let cmd = encode_command("AI", "2");
-        assert_eq!(cmd, b"AI2;");
+        let cmd = encode_command("AI", "1");
+        assert_eq!(cmd, b"AI1;");
     }
 
     // ---------------------------------------------------------------
@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn decode_auto_info_response() {
-        let buf = b"AI2;";
+        let buf = b"AI1;";
         match decode_response(buf) {
             DecodeResult::Response {
                 prefix,
@@ -457,7 +457,7 @@ mod tests {
                 consumed,
             } => {
                 assert_eq!(prefix, "AI");
-                assert_eq!(data, "2");
+                assert_eq!(data, "1");
                 assert_eq!(consumed, 4);
             }
             other => panic!("expected Response, got {other:?}"),

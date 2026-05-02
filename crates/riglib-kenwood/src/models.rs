@@ -84,6 +84,15 @@ pub struct KenwoodModel {
     /// - TS-590S/SG: 10 Hz per step
     /// - TS-890S/TS-990S: 1 Hz per step
     pub rit_step_hz: u16,
+    /// AI (Auto Information) enable byte sent in `AI<n>;` to turn
+    /// transceive on. The value is model-dependent:
+    /// - TS-990S uses `b'2'` for the per-event broadcast mode.
+    /// - All other supported Kenwood HF rigs (TS-590S, TS-590SG, TS-890S)
+    ///   use `b'1'`.
+    ///
+    /// `AI0;` is always the disable command and lives in the IO task's
+    /// `shutdown_command` rather than here.
+    pub ai_enable_byte: u8,
 }
 
 impl From<&KenwoodModel> for RigDefinition {
@@ -173,6 +182,7 @@ pub fn ts_590s() -> KenwoodModel {
         agc_command_style: AgcCommandStyle::GtTimeConstant,
         has_preamp2: false,
         rit_step_hz: 10,
+        ai_enable_byte: b'1',
     }
 }
 
@@ -218,6 +228,7 @@ pub fn ts_590sg() -> KenwoodModel {
         agc_command_style: AgcCommandStyle::GtTimeConstant,
         has_preamp2: false,
         rit_step_hz: 10,
+        ai_enable_byte: b'1',
     }
 }
 
@@ -269,6 +280,7 @@ pub fn ts_990s() -> KenwoodModel {
         agc_command_style: AgcCommandStyle::GcVfo,
         has_preamp2: true,
         rit_step_hz: 1,
+        ai_enable_byte: b'2',
     }
 }
 
@@ -315,6 +327,7 @@ pub fn ts_890s() -> KenwoodModel {
         agc_command_style: AgcCommandStyle::GcSimple,
         has_preamp2: false,
         rit_step_hz: 1,
+        ai_enable_byte: b'1',
     }
 }
 

@@ -210,15 +210,19 @@ pub fn cmd_set_tx_vfo(vfo_b: bool) -> Vec<u8> {
 
 /// Build a "set AI (Auto Information) mode" command.
 ///
-/// - `AI2;` enables AI mode (rig pushes state changes).
-/// - `AI0;` disables AI mode.
+/// The enable value is model-dependent: TS-990S uses `AI2;`, while the
+/// TS-590S/SG and TS-890S use `AI1;`. Disable is always `AI0;`. Pass
+/// `enable_byte = model.ai_enable_byte` from the
+/// [`KenwoodModel`](crate::models::KenwoodModel) to get the right value.
 ///
 /// # Arguments
 ///
 /// * `on` - `true` to enable AI mode, `false` to disable.
-pub fn cmd_set_ai(on: bool) -> Vec<u8> {
+/// * `enable_byte` - the ASCII byte (`b'1'` or `b'2'`) used in the enable
+///   command for this model. Ignored when `on` is `false`.
+pub fn cmd_set_ai(on: bool, enable_byte: u8) -> Vec<u8> {
     if on {
-        encode_command("AI", "2")
+        encode_command("AI", &(enable_byte as char).to_string())
     } else {
         encode_command("AI", "0")
     }
@@ -1177,13 +1181,22 @@ mod tests {
     }
 
     #[test]
-    fn cmd_set_ai_on() {
-        assert_eq!(cmd_set_ai(true), b"AI2;");
+    fn cmd_set_ai_on_default() {
+        // Most Kenwood HF rigs (TS-590S/SG, TS-890S) use AI1 to enable.
+        assert_eq!(cmd_set_ai(true, b'1'), b"AI1;");
+    }
+
+    #[test]
+    fn cmd_set_ai_on_ts990s() {
+        // TS-990S uses AI2 for the per-event broadcast mode.
+        assert_eq!(cmd_set_ai(true, b'2'), b"AI2;");
     }
 
     #[test]
     fn cmd_set_ai_off() {
-        assert_eq!(cmd_set_ai(false), b"AI0;");
+        // The enable byte is ignored when disabling.
+        assert_eq!(cmd_set_ai(false, b'1'), b"AI0;");
+        assert_eq!(cmd_set_ai(false, b'2'), b"AI0;");
     }
 
     #[test]

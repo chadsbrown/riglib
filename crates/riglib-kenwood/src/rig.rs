@@ -125,7 +125,7 @@ impl riglib_text_io::io::AiHandler for KenwoodAiHandler {
 /// Constructed via [`KenwoodBuilder`](crate::builder::KenwoodBuilder). All rig
 /// communication goes through the [`Transport`] provided at build time.
 pub struct KenwoodRig {
-    io: riglib_text_io::io::RigIo,
+    pub(crate) io: riglib_text_io::io::RigIo,
     model: KenwoodModel,
     event_tx: broadcast::Sender<RigEvent>,
     command_timeout: Duration,
@@ -161,6 +161,7 @@ impl KenwoodRig {
         ptt_method: PttMethod,
         key_line: KeyLine,
         set_command_mode: SetCommandMode,
+        ai_enabled: bool,
         #[cfg(feature = "audio")] audio_device_name: Option<String>,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(256);
@@ -171,7 +172,7 @@ impl KenwoodRig {
         };
 
         let config = riglib_text_io::io::IoConfig {
-            ai_enabled: false,
+            ai_enabled,
             command_timeout,
             auto_retry,
             max_retries,
@@ -944,16 +945,18 @@ impl Rig for KenwoodRig {
         self.execute_set_command(&cmd).await
     }
 
+    /// AI (Auto Information) mode is configured declaratively at build
+    /// time via [`KenwoodBuilder::ai`](crate::builder::KenwoodBuilder::ai);
+    /// this runtime method is a no-op kept for trait compatibility.
     async fn enable_transceive(&self) -> Result<()> {
-        self.io
-            .set_command(b"AI2;".to_vec(), self.command_timeout)
-            .await
+        debug!("enable_transceive called (no-op; use KenwoodBuilder::ai(true) instead)");
+        Ok(())
     }
 
+    /// No-op for Kenwood. See [`enable_transceive`](Self::enable_transceive).
     async fn disable_transceive(&self) -> Result<()> {
-        self.io
-            .set_command(b"AI0;".to_vec(), self.command_timeout)
-            .await
+        debug!("disable_transceive called (no-op; use KenwoodBuilder::ai(true) instead)");
+        Ok(())
     }
 
     fn subscribe(&self) -> Result<broadcast::Receiver<RigEvent>> {
@@ -1033,6 +1036,7 @@ mod tests {
             PttMethod::Cat,
             KeyLine::None,
             SetCommandMode::NoVerify,
+            false, // ai_enabled
             #[cfg(feature = "audio")]
             None,
         )
@@ -1050,6 +1054,7 @@ mod tests {
             PttMethod::Cat,
             KeyLine::None,
             SetCommandMode::NoVerify,
+            false, // ai_enabled
             #[cfg(feature = "audio")]
             None,
         )
@@ -1660,6 +1665,7 @@ mod tests {
             PttMethod::Cat,
             KeyLine::None,
             SetCommandMode::NoVerify,
+            false, // ai_enabled
             #[cfg(feature = "audio")]
             None,
         )
@@ -2474,6 +2480,7 @@ mod tests {
                 PttMethod::Cat,
                 KeyLine::None,
                 SetCommandMode::NoVerify,
+                false, // ai_enabled
                 device_name.map(|s| s.to_string()),
             )
         }

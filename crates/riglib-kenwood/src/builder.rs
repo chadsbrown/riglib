@@ -28,6 +28,7 @@ use riglib_core::error::{Error, Result};
 use riglib_core::transport::Transport;
 use riglib_core::types::{KeyLine, PttMethod, SetCommandMode};
 
+use crate::commands;
 use crate::models::KenwoodModel;
 use crate::rig::KenwoodRig;
 
@@ -52,6 +53,11 @@ pub struct KenwoodBuilder {
     ptt_method: PttMethod,
     key_line: KeyLine,
     set_command_mode: SetCommandMode,
+    /// Whether to enable AI (Auto Information / transceive) mode at connect.
+    /// When `true`, the builder sends the model-appropriate `AI<n>;` after
+    /// construction (TS-990S uses `AI2;`, others `AI1;`) so the rig pushes
+    /// unsolicited state-change frames.
+    ai: bool,
     /// USB audio device name for audio streaming (e.g. "USB Audio CODEC").
     #[cfg(feature = "audio")]
     audio_device_name: Option<String>,
@@ -70,6 +76,7 @@ impl KenwoodBuilder {
             ptt_method: PttMethod::Cat,
             key_line: KeyLine::None,
             set_command_mode: SetCommandMode::default(),
+            ai: false,
             #[cfg(feature = "audio")]
             audio_device_name: None,
         }
@@ -126,6 +133,32 @@ impl KenwoodBuilder {
         self
     }
 
+    /// Enable AI (Auto Information / transceive) mode. Default: `false`.
+    ///
+    /// When `true`, the builder sends the model-appropriate enable command
+    /// at connect time — `AI2;` for TS-990S, `AI1;` for TS-590S/SG and
+    /// TS-890S, picked from
+    /// [`KenwoodModel::ai_enable_byte`](crate::models::KenwoodModel::ai_enable_byte).
+    /// The rig then pushes unsolicited frequency, mode, PTT, and RIT/XIT
+    /// updates as semicolon-terminated frames; the IO task parses them and
+    /// emits [`RigEvent`](riglib_core::events::RigEvent)s on the channel
+    /// returned by [`subscribe()`](riglib_core::rig::Rig::subscribe). When
+    /// `false` (the default), unsolicited frames are silently drained.
+    ///
+    /// Unlike Icom CI-V transceive (a persistent radio menu setting),
+    /// Kenwood AI mode is purely a CAT command and does not always survive
+    /// power-cycle, so riglib must actively send the enable command here.
+    /// On rig drop the IO task sends `AI0;` to leave the radio clean.
+    ///
+    /// When using AI mode, callers typically should **not** also poll
+    /// [`get_frequency`](riglib_core::rig::Rig::get_frequency) and
+    /// [`get_mode`](riglib_core::rig::Rig::get_mode) at high rates — the
+    /// poll responses and the rig's broadcast frames can collide.
+    pub fn ai(mut self, enabled: bool) -> Self {
+        self.ai = enabled;
+        self
+    }
+
     /// Set the USB audio device name for audio streaming.
     ///
     /// The name should match a device reported by
@@ -146,6 +179,10 @@ impl KenwoodBuilder {
     /// `MockTransport` from `riglib-test-harness`) and for
     /// advanced use cases where the caller manages the transport
     /// lifecycle directly.
+    ///
+    /// When [`ai(true)`](Self::ai) was called, this also sends the
+    /// model-appropriate `AI<n>;` command after the IO task is spawned,
+    /// so transceive broadcasts begin flowing immediately.
     pub async fn build_with_transport(self, transport: Box<dyn Transport>) -> Result<KenwoodRig> {
         // Validate that ptt_method and key_line don't use the same serial line.
         if self.ptt_method == PttMethod::Dtr && self.key_line == KeyLine::Dtr {
@@ -159,7 +196,10 @@ impl KenwoodBuilder {
             ));
         }
 
-        Ok(KenwoodRig::new(
+        let command_timeout = self.command_timeout;
+        let ai = self.ai;
+        let enable_byte = self.model.ai_enable_byte;
+        let rig = KenwoodRig::new(
             transport,
             self.model,
             self.auto_retry,
@@ -168,9 +208,18 @@ impl KenwoodBuilder {
             self.ptt_method,
             self.key_line,
             self.set_command_mode,
+            ai,
             #[cfg(feature = "audio")]
             self.audio_device_name,
-        ))
+        );
+
+        if ai {
+            rig.io
+                .set_command(commands::cmd_set_ai(true, enable_byte), command_timeout)
+                .await?;
+        }
+
+        Ok(rig)
     }
 
     /// Build a [`KenwoodRig`] using a serial transport.
@@ -275,5 +324,95 @@ mod tests {
         assert_eq!(rig.capabilities().max_receivers, 2);
         assert!(rig.capabilities().has_sub_receiver);
         assert!((rig.capabilities().max_power_watts - 200.0).abs() < f32::EPSILON);
+    }
+
+    // ------------------------------------------------------------------
+    // AI / transceive
+    // ------------------------------------------------------------------
+
+    /// `.ai(true)` on a TS-890S sends `AI1;` at connect (the default Kenwood
+    /// enable). If anything else were sent, the `MockTransport` would refuse.
+    #[tokio::test]
+    async fn ai_true_ts890s_sends_ai1_at_connect() {
+        let mut mock = MockTransport::new();
+        mock.expect(b"AI1;", b"");
+
+        let _rig = KenwoodBuilder::new(ts_890s())
+            .ai(true)
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+    }
+
+    /// `.ai(true)` on a TS-990S sends `AI2;` (the per-event broadcast mode
+    /// specific to the TS-990S).
+    #[tokio::test]
+    async fn ai_true_ts990s_sends_ai2_at_connect() {
+        use crate::models::ts_990s;
+
+        let mut mock = MockTransport::new();
+        mock.expect(b"AI2;", b"");
+
+        let _rig = KenwoodBuilder::new(ts_990s())
+            .ai(true)
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+    }
+
+    /// Default builder (no `.ai()`) sends nothing at connect.
+    #[tokio::test]
+    async fn ai_default_sends_nothing_at_connect() {
+        let mock = MockTransport::new();
+        let _rig = KenwoodBuilder::new(ts_890s())
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+    }
+
+    /// With `.ai(true)`, an interleaved `FB...;` in a `FA;` response is
+    /// emitted as an event for VFO B; the trailing `FA` returns cleanly.
+    #[tokio::test]
+    async fn ai_true_emits_event_and_doesnt_poison_query() {
+        use riglib_core::events::RigEvent;
+        use riglib_core::types::ReceiverId;
+
+        let mut mock = MockTransport::new();
+        mock.expect(b"AI1;", b"");
+        // Kenwood frequencies are 11 digits.
+        mock.expect(b"FA;", b"FB00014300000;FA00014250000;");
+
+        let rig = KenwoodBuilder::new(ts_890s())
+            .ai(true)
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+
+        let mut events = rig.subscribe().unwrap();
+        let freq = rig.get_frequency(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(freq, 14_250_000);
+
+        let event = events.try_recv().expect("expected an FB event");
+        match event {
+            RigEvent::FrequencyChanged { receiver, freq_hz } => {
+                assert_eq!(receiver, ReceiverId::VFO_B);
+                assert_eq!(freq_hz, 14_300_000);
+            }
+            other => panic!("expected FrequencyChanged for VFO_B, got {other:?}"),
+        }
+    }
+
+    /// `enable_transceive` and `disable_transceive` must not send any
+    /// bytes; with no expectations queued, any send would error.
+    #[tokio::test]
+    async fn enable_disable_transceive_are_noops() {
+        let mock = MockTransport::new();
+        let rig = KenwoodBuilder::new(ts_890s())
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+
+        rig.enable_transceive().await.unwrap();
+        rig.disable_transceive().await.unwrap();
     }
 }

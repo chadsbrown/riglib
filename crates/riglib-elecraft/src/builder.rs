@@ -28,6 +28,7 @@ use riglib_core::error::{Error, Result};
 use riglib_core::transport::Transport;
 use riglib_core::types::{KeyLine, PttMethod, SetCommandMode};
 
+use crate::commands;
 use crate::models::ElecraftModel;
 use crate::rig::ElecraftRig;
 
@@ -52,6 +53,10 @@ pub struct ElecraftBuilder {
     ptt_method: PttMethod,
     key_line: KeyLine,
     set_command_mode: SetCommandMode,
+    /// Whether to enable AI (Auto Information / transceive) mode at connect.
+    /// When `true`, the builder sends `AI2;` after construction so the rig
+    /// pushes per-event broadcasts (FA, FB, MD, IF, etc.).
+    ai: bool,
     /// USB audio device name for audio streaming (e.g. "USB Audio CODEC").
     #[cfg(feature = "audio")]
     audio_device_name: Option<String>,
@@ -70,6 +75,7 @@ impl ElecraftBuilder {
             ptt_method: PttMethod::Cat,
             key_line: KeyLine::None,
             set_command_mode: SetCommandMode::default(),
+            ai: false,
             #[cfg(feature = "audio")]
             audio_device_name: None,
         }
@@ -126,6 +132,30 @@ impl ElecraftBuilder {
         self
     }
 
+    /// Enable AI (Auto Information / transceive) mode. Default: `false`.
+    ///
+    /// When `true`, the builder sends `AI2;` to the radio at connect time.
+    /// On Elecraft K3/K3S/K4/KX3/KX2, AI2 is the per-event broadcast mode:
+    /// the rig sends an `FA`/`FB`/`MD`/etc. response whenever any
+    /// front-panel control changes. The IO task parses these and emits
+    /// [`RigEvent`](riglib_core::events::RigEvent)s on the channel returned
+    /// by [`subscribe()`](riglib_core::rig::Rig::subscribe). When `false`
+    /// (the default), unsolicited frames are silently drained.
+    ///
+    /// (AI1 mode, which only sends `IF` responses on freq/mode change, is
+    /// not used by this builder — AI2 carries strictly more information.)
+    ///
+    /// On rig drop the IO task sends `AI0;` to leave the radio clean.
+    ///
+    /// When using AI mode, callers typically should **not** also poll
+    /// [`get_frequency`](riglib_core::rig::Rig::get_frequency) and
+    /// [`get_mode`](riglib_core::rig::Rig::get_mode) at high rates — the
+    /// poll responses and the rig's broadcast frames can collide.
+    pub fn ai(mut self, enabled: bool) -> Self {
+        self.ai = enabled;
+        self
+    }
+
     /// Set the USB audio device name for audio streaming.
     ///
     /// The name should match a device reported by
@@ -146,6 +176,10 @@ impl ElecraftBuilder {
     /// `MockTransport` from `riglib-test-harness`) and for
     /// advanced use cases where the caller manages the transport
     /// lifecycle directly.
+    ///
+    /// When [`ai(true)`](Self::ai) was called, this also sends `AI2;` to
+    /// the radio after the IO task is spawned, so transceive broadcasts
+    /// begin flowing immediately.
     pub async fn build_with_transport(self, transport: Box<dyn Transport>) -> Result<ElecraftRig> {
         // Validate that ptt_method and key_line don't use the same serial line.
         if self.ptt_method == PttMethod::Dtr && self.key_line == KeyLine::Dtr {
@@ -159,7 +193,9 @@ impl ElecraftBuilder {
             ));
         }
 
-        Ok(ElecraftRig::new(
+        let command_timeout = self.command_timeout;
+        let ai = self.ai;
+        let rig = ElecraftRig::new(
             transport,
             self.model,
             self.auto_retry,
@@ -168,9 +204,18 @@ impl ElecraftBuilder {
             self.ptt_method,
             self.key_line,
             self.set_command_mode,
+            ai,
             #[cfg(feature = "audio")]
             self.audio_device_name,
-        ))
+        );
+
+        if ai {
+            rig.io
+                .set_command(commands::cmd_set_ai(true), command_timeout)
+                .await?;
+        }
+
+        Ok(rig)
     }
 
     /// Build an [`ElecraftRig`] using a serial transport.
@@ -306,5 +351,79 @@ mod tests {
         assert_eq!(rig.capabilities().max_receivers, 2);
         assert!(rig.capabilities().has_sub_receiver);
         assert!((rig.capabilities().max_power_watts - 100.0).abs() < f32::EPSILON);
+    }
+
+    // ------------------------------------------------------------------
+    // AI / transceive
+    // ------------------------------------------------------------------
+
+    /// `.ai(true)` sends `AI2;` at connect (per-event broadcast mode).
+    /// If anything else were sent, the `MockTransport` would refuse.
+    #[tokio::test]
+    async fn ai_true_sends_ai2_at_connect() {
+        let mut mock = MockTransport::new();
+        mock.expect(b"AI2;", b"");
+
+        let _rig = ElecraftBuilder::new(k4())
+            .ai(true)
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+    }
+
+    /// Default builder (no `.ai()`) sends nothing at connect.
+    #[tokio::test]
+    async fn ai_default_sends_nothing_at_connect() {
+        let mock = MockTransport::new();
+        let _rig = ElecraftBuilder::new(k4())
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+    }
+
+    /// With `.ai(true)`, an interleaved `FB...;` in a `FA;` response is
+    /// emitted as an event for VFO B; the trailing `FA` returns cleanly.
+    #[tokio::test]
+    async fn ai_true_emits_event_and_doesnt_poison_query() {
+        use riglib_core::events::RigEvent;
+        use riglib_core::types::ReceiverId;
+
+        let mut mock = MockTransport::new();
+        mock.expect(b"AI2;", b"");
+        // Elecraft uses Kenwood-compatible 11-digit frequencies.
+        mock.expect(b"FA;", b"FB00014300000;FA00014250000;");
+
+        let rig = ElecraftBuilder::new(k4())
+            .ai(true)
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+
+        let mut events = rig.subscribe().unwrap();
+        let freq = rig.get_frequency(ReceiverId::VFO_A).await.unwrap();
+        assert_eq!(freq, 14_250_000);
+
+        let event = events.try_recv().expect("expected an FB event");
+        match event {
+            RigEvent::FrequencyChanged { receiver, freq_hz } => {
+                assert_eq!(receiver, ReceiverId::VFO_B);
+                assert_eq!(freq_hz, 14_300_000);
+            }
+            other => panic!("expected FrequencyChanged for VFO_B, got {other:?}"),
+        }
+    }
+
+    /// `enable_transceive` and `disable_transceive` must not send any
+    /// bytes; with no expectations queued, any send would error.
+    #[tokio::test]
+    async fn enable_disable_transceive_are_noops() {
+        let mock = MockTransport::new();
+        let rig = ElecraftBuilder::new(k4())
+            .build_with_transport(Box::new(mock))
+            .await
+            .unwrap();
+
+        rig.enable_transceive().await.unwrap();
+        rig.disable_transceive().await.unwrap();
     }
 }

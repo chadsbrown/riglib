@@ -420,14 +420,18 @@ pub fn cmd_stop_cw_message() -> Vec<u8> {
 /// Build a "set Auto Information mode" command.
 ///
 /// - `AI0;` disables auto information (no unsolicited messages).
-/// - `AI2;` enables auto information (rig pushes state changes).
+/// - `AI1;` enables auto information (rig pushes state changes).
+///
+/// All Yaesu newcat-family rigs (FT-DX10, FT-DX101, FT-991, FT-710, FT-891,
+/// etc.) use `AI1;` to enable. `AI2;` is not a Yaesu CAT value; sending it
+/// can leave the radio in an undefined state.
 ///
 /// # Arguments
 ///
 /// * `on` - `true` to enable AI mode, `false` to disable.
 pub fn cmd_set_ai(on: bool) -> Vec<u8> {
     if on {
-        encode_command("AI", "2")
+        encode_command("AI", "1")
     } else {
         encode_command("AI", "0")
     }
@@ -1916,7 +1920,7 @@ mod tests {
 
     #[test]
     fn cmd_set_ai_on() {
-        assert_eq!(cmd_set_ai(true), b"AI2;");
+        assert_eq!(cmd_set_ai(true), b"AI1;");
     }
 
     #[test]
